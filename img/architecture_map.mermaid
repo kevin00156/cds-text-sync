@@ -1,0 +1,82 @@
+%% cds-text-sync architecture map
+%% Three runtimes: (A) CODESYS IronPython 2.7  (B) CPython 3 engine  (C) CPython 3 CLI
+flowchart TB
+
+  subgraph U["👤 使用者觸發方式"]
+    U1["CODESYS 選單<br/>(執行 Project_*.py)"]
+    U2["命令列<br/>cds-text-sync ..."]
+  end
+
+  %% ---------- Runtime A: inside CODESYS (IronPython 2.7) ----------
+  subgraph A["🟦 Runtime A — 在 CODESYS 內 (IronPython 2.7, 受限環境)"]
+    direction TB
+    A0["cds_bootstrap.py<br/>找路徑 / 載入 .runtime 模組"]
+    A1["Project_export / import / compare /<br/>build / discover / resources / options /<br/>directory / compare_ui / daemon<br/>(薄入口 shim)"]
+    A2["codesys_runtime.pyw<br/>載入器 + 派工<br/>run_project_command / run_bridge_operation"]
+    A3["codesys_*_operation.pyw<br/>(extractor/injector/compare/build/<br/>discover/resources/options...)<br/>← 現在只是薄薄委派"]
+    A4["codesys_constants / utils / ui .pyw<br/>常數・工具・WinForms 對話框"]
+
+    subgraph AB["src/ide_bridge/ — 真正碰 IDE API 的橋接"]
+      AB1["ide_run_action.py<br/>編排 export/import"]
+      AB2["ide_export_snapshot.py<br/>project.export_native → IDE.xml"]
+      AB3["ide_apply_patch.py<br/>把 IMPORT.xml + 文字API 寫回 IDE"]
+      AB4["ide_compare.py / ide_resources.py / ide_backup.py"]
+      AB5["ide_online_helpers.py<br/>連線/登入/讀寫變數<br/>(SP21/22 版本眉角)"]
+      AB6["ide_reverse_pipe_loop.py ⭐3868行<br/>常駐 daemon：收 CLI 命令→執行→回傳"]
+      AB7["ide_runtime_common.py<br/>★唯一的 subprocess 邊界"]
+      ABx["ide_daemon.pyw / ide_daemon_ui.py<br/>(舊 forward-pipe，已被取代)"]:::legacy
+    end
+  end
+
+  %% ---------- Runtime B: external engine (CPython 3) ----------
+  subgraph B["🟩 Runtime B — 外部引擎 (CPython 3, 重邏輯都在這)"]
+    direction TB
+    B0["engine_cli.py<br/>子命令 export/compare/import/validate/resources"]
+    B1["snapshot_reader.py<br/>IDE.xml → ProjectModel"]
+    B2["folder_reader / folder_writer.py<br/>project-view/ ⇄ ProjectModel"]
+    B3["diff_engine.py<br/>比對兩個 model"]
+    B4["_patch_builder.py<br/>model 差異 → IMPORT.xml"]
+    B5["report_writer / resources_report.py"]
+    B6["_project_model.py (資料模型)"]
+    B7["_project_layout / _project_settings /<br/>_project_profiles.py (設定)"]
+    B8["xml_helpers.py (XML/雜湊工具)"]
+  end
+
+  %% ---------- Runtime C: CLI (CPython 3) ----------
+  subgraph C["🟨 Runtime C — CLI (CPython 3, pip 安裝)"]
+    direction TB
+    C0["cds_text_sync.py<br/>cds-text-sync 指令"]
+    C1["reverse_pipe_client.py<br/>(現行傳輸：named pipe)"]
+    C2["daemon_pipe.py (forward, 舊)<br/>daemon.py (HTTP:8377, 幾乎死碼)"]:::legacy
+  end
+
+  %% ---------- Files on disk ----------
+  subgraph D["💾 磁碟產物"]
+    D1[".dump/IDE.xml<br/>★canonical 快照"]
+    D2["project-view/<br/>Git 友善的 .st/.csv/.xml 投影"]
+    D3[".dump/IMPORT.xml / compare_report.json / manifest.json"]
+    D4[".backup/*.project"]
+    D5["*.settings.json / profiles/*.json"]
+  end
+
+  %% flows
+  U1 --> A1 --> A0 --> A2 --> A3 --> AB1
+  U2 --> C0
+  C0 --> C1 -->|named pipe| AB6
+  AB6 --> AB5
+
+  AB1 --> AB2 --> D1
+  AB1 --> AB7
+  AB7 -->|subprocess: python engine_cli.py| B0
+  AB1 --> AB3 --> D1
+  AB3 -->|讀| D3
+
+  B0 --> B1 --> D1
+  B0 --> B2 --> D2
+  B0 --> B3
+  B0 --> B4 --> D3
+  B0 --> B5 --> D3
+  B7 --> D5
+  AB6 --> D4
+
+  classDef legacy fill:#fdd,stroke:#c00,stroke-dasharray:5 3;
