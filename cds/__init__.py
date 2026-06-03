@@ -6,4 +6,4 @@ Layering (see PRINCIPLES.md and docs/REWORK_PLAN.md):
     cds.core  -> pure Python, no CODESYS imports, unit-tested in CI
     cds.app   -> thin orchestration wiring ide + core together
 """
-VERSION = "3.0.0-dev"
+VERSION = "k1.0.0"
