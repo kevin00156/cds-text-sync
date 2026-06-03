@@ -221,6 +221,19 @@ def find_all_changes(base_dir, projects_obj, export_xml=False):
                 rel_path = build_expected_path(obj, eff_type, is_xml)
             else:
                 rel_path = None
+
+        # ── CRITICAL: honor the same export_xml gate that export uses ──
+        # Export does NOT write XML-type objects to disk when export_xml is off
+        # (Library Manager, Visualizations, Alarm config, Trace, ...). Without
+        # the same gate here, Pass 2 sees "no disk file" for them, marks them as
+        # orphans, and import then DELETES them. Skip them entirely so they are
+        # never treated as orphans. task_config / NVL are always exported, so
+        # they are not skipped (matches Project_export.py).
+        if not export_xml and is_xml and eff_type in XML_TYPES:
+            if eff_type not in (TYPE_GUIDS["task_config"],
+                                TYPE_GUIDS["nvl_sender"],
+                                TYPE_GUIDS["nvl_receiver"]):
+                continue
             
         if should_skip or not rel_path: 
             continue
