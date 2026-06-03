@@ -94,7 +94,7 @@ def ask_yes_no_cancel(title, message):
 class SettingsForm(Form):
     def __init__(self, current_settings, version=None):
         self.Text = "CODESYS Sync Settings"
-        self.Size = Size(420, 390) # Increased height for retention count
+        self.Size = Size(420, 430) # Height fits retention + diagnostics group
         self.FormBorderStyle = FormBorderStyle.FixedDialog
         self.StartPosition = FormStartPosition.CenterScreen
         self.MaximizeBox = False
@@ -188,17 +188,26 @@ class SettingsForm(Form):
         self.txt_retention.Text = str(current_settings.get("retention_count", 10))
         self.Controls.Add(self.txt_retention)
 
+        # Group 3: Diagnostics
+        y += 40
+        self.chk_debug = CheckBox()
+        self.chk_debug.Text = "Debug mode (write metadata + logs)"
+        self.chk_debug.Location = Point(30, y)
+        self.chk_debug.Size = Size(350, 24)
+        self.chk_debug.Checked = current_settings.get("debug", False)
+        self.Controls.Add(self.chk_debug)
+
         # Buttons
         btn_cancel = Button()
         btn_cancel.Text = "Cancel"
         btn_cancel.DialogResult = DialogResult.Cancel
-        btn_cancel.Location = Point(290, 310)
+        btn_cancel.Location = Point(290, 350)
         self.Controls.Add(btn_cancel)
 
         btn_save = Button()
         btn_save.Text = "Save Settings"
         btn_save.DialogResult = DialogResult.OK
-        btn_save.Location = Point(160, 310)
+        btn_save.Location = Point(160, 350)
         btn_save.Size = Size(120, 23)
         self.Controls.Add(btn_save)
         self.AcceptButton = btn_save
@@ -219,7 +228,8 @@ class SettingsForm(Form):
             "save_after_import": self.chk_save.Checked,
             "save_after_export": self.chk_save_exp.Checked,
             "safety_backup": self.chk_safety.Checked,
-            "retention_count": retention
+            "retention_count": retention,
+            "debug": self.chk_debug.Checked
         }
 
 def show_settings_dialog(current_settings, version=None):
