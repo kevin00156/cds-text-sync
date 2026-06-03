@@ -90,9 +90,12 @@ PROPERTY_SET_MARKER = "// === SET ==="
 
 FORBIDDEN_FILENAME_CHARS = ("<", ">", ":", '"', "/", "\\", "|", "?", "*")
 
+# Files the sync engine owns and must never treat as project content.
+# Legacy junk (_metadata.json, _config.json, BASE_DIR, ...) is intentionally
+# dropped — see docs/REWORK_PLAN.md metadata policy.
 RESERVED_FILES = frozenset([
-    "sync_metadata.json", "sync_cache.json", ".project",
-    ".gitattributes", ".gitignore", "sync_debug.log",
+    "sync_cache.json", "sync_metadata.json", "sync_debug.log", "compare.log",
+    ".project", ".gitattributes", ".gitignore",
 ])
 
 

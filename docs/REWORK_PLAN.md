@@ -137,6 +137,22 @@ Project_import.py
 
 ---
 
+## 6.5 Metadata 政策（debug 才產生）
+
+舊版每次 export/import 都吐 `sync_metadata.json`（且進 git，時戳每跑必變 →
+污染每個 PR diff），還有一堆 `*.log`。常態根本不需要。新版規則（見
+`cds/settings.py`）：
+
+| 類別 | 檔案 | 行為 |
+|---|---|---|
+| 永遠寫 | 內容檔 `.st`/`.xml`、`.gitattributes` | 正常產生、進 git |
+| 本機快取 | `sync_cache.json` | 正常產生但 **gitignore**，不進版控 |
+| **debug 才寫** | `sync_metadata.json`、`*.log` | `cds-sync-debug` 開才產生；平常摘要只進 console/popup |
+| 丟棄 | `_metadata.json`/`_config.json`/`BASE_DIR` 等舊殘留 | 不再產生 |
+
+開關：CODESYS 專案屬性 `cds-sync-debug`（存在 .project 內，不污染 git）。
+`Settings.wants_metadata()` 是唯一的判斷點，app 層據此決定寫不寫。
+
 ## 7. 分階段 TODO
 
 > 每階段獨立可跑、可測、可 commit。不要一次大爆炸。

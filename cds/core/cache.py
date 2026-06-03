@@ -4,6 +4,9 @@
 Deliberately tiny: one JSON file of {relative_path: content_hash}. If the
 hash matches, the object is unchanged and we skip writing it. No cache
 version migrations, no Merkle tree — that complexity was not worth it.
+
+This file is machine-local state, not project data: it must be gitignored
+and never committed (see cds.settings.LOCAL_STATE_FILES).
 """
 from __future__ import print_function
 

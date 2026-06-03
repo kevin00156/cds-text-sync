@@ -1,3 +1,8 @@
 __pycache__/
 *.pyc
 .pytest_cache/
+
+# Machine-local sync state and debug output — never commit (see cds/settings.py).
+sync_cache.json
+sync_metadata.json
+*.log
