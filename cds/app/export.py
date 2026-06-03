@@ -5,6 +5,7 @@ from __future__ import print_function
 import os
 import tempfile
 
+from cds import types
 from cds.ide import snapshot
 from cds.core import model, textfile, cache
 from cds.settings import Settings
@@ -30,8 +31,14 @@ def run(project, base_dir, settings=None, system=None):
 
 
 def _hashes_for(objects):
-    # TODO(stage 3): {rel_path: cache.content_hash(body)} for each object.
-    raise NotImplementedError("cds.app.export._hashes_for")
+    """{rel_path: content_hash} for every content object (folders excluded)."""
+    hashes = {}
+    for obj in objects:
+        if obj.type_guid == types.TYPE_GUIDS["folder"]:
+            continue
+        hashes[textfile.rel_path_for(obj)] = cache.content_hash(
+            textfile.object_body(obj))
+    return hashes
 
 
 def _write_run_metadata(base_dir, objects):

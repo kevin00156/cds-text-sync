@@ -1,6 +1,6 @@
 # cds-text-sync: Professional CODESYS Git Sync
 
-**Version**: `1.7.3`
+**Version**: `k1.0.0`
 
 > [!IMPORTANT]
 > **Disclaimer**: This is a third-party tool. It is NOT an official product of CODESYS Group and is not affiliated with, sponsored by, or endorsed by CODESYS Group. This tool is provided "as is" and is not a replacement for official CODESYS products.
@@ -125,7 +125,8 @@ git checkout v1.7.2
 > You can also use the **Quick PowerShell Setup** script (Method 2 above) which automatically downloads stable releases as clean zip archives without requiring Git installation.
 
 ### Version Policy
-- **Tags starting with `v`**: Official stable releases (e.g., `v1.7.3`, `v1.7.2`)
+- **Tags starting with `k`**: This independent fork line (e.g., `k1.0.0`). The
+  fork diverged from upstream and is versioned separately.
 - **Main branch**: Latest development code (may be unstable)
 - **Testing**: All stable releases are manually tested before tagging
 

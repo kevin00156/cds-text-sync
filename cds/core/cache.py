@@ -10,7 +10,10 @@ and never committed (see cds.settings.LOCAL_STATE_FILES).
 """
 from __future__ import print_function
 
+import codecs
 import hashlib
+import json
+import os
 
 CACHE_FILE = "sync_cache.json"
 
@@ -23,12 +26,28 @@ def content_hash(text):
 
 
 def load(base_dir):
-    """Load {rel_path: hash} from base_dir; return {} if absent/unreadable."""
-    # TODO(stage 3): read CACHE_FILE; tolerate missing/corrupt -> {}.
-    raise NotImplementedError("cds.core.cache.load")
+    """Load {rel_path: hash} from base_dir; return {} if absent/unreadable.
+
+    A missing or corrupt cache is not an error — it just means "nothing known,
+    rebuild everything". We never crash the sync over local cache state.
+    """
+    path = os.path.join(base_dir, CACHE_FILE)
+    if not os.path.exists(path):
+        return {}
+    try:
+        with codecs.open(path, "r", "utf-8") as fh:
+            data = json.load(fh)
+    except (ValueError, IOError, OSError):
+        return {}
+    return data if isinstance(data, dict) else {}
 
 
 def save(base_dir, hashes):
-    """Write {rel_path: hash} to base_dir."""
-    # TODO(stage 3): atomic write of CACHE_FILE.
-    raise NotImplementedError("cds.core.cache.save")
+    """Write {rel_path: hash} to base_dir atomically (temp file + rename)."""
+    path = os.path.join(base_dir, CACHE_FILE)
+    tmp = path + ".tmp"
+    with codecs.open(tmp, "w", "utf-8") as fh:
+        json.dump(hashes, fh, indent=2, sort_keys=True)
+    if os.path.exists(path):
+        os.remove(path)
+    os.rename(tmp, path)

@@ -4,6 +4,19 @@ All notable changes to this project will be documented in this file.
 
 ---
 
+### Version k1.0.0 (in progress)
+
+**Independent fork line + text-first rework.** Diverged from upstream after the
+1.7.x base. The legacy flat modules (`codesys_*.pyw`) still drive the running
+tool while the new `cds/` package is being built out per `docs/REWORK_PLAN.md`.
+
+- **Versioning**: fork uses a `k` prefix, tracked independently from upstream.
+- **`cds/core`**: pure-Python, CI-tested layer — canonical `.st`/property text
+  format, type inference, disk<->object reader/writer, diff, and hash cache.
+- **In progress**: the native-snapshot seam (`cds/core/model`, `cds/core/patch`)
+  and the `cds/ide` layer; legacy modules are removed only once these are
+  verified against a real CODESYS IDE.
+
 ### Version 1.7.3 (2026-04-02)
 
 **Move/Rename Detection & Stale File Cleanup:**

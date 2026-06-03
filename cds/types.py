@@ -83,6 +83,15 @@ IMPLEMENTATION_TYPES = (
     TYPE_GUIDS["method"],
 )
 
+# Children that live inside a POU/interface. On disk they are named
+# "<parent>.<child>.<ext>" so they sit next to their owner.
+NESTED_TYPES = (
+    TYPE_GUIDS["action"],
+    TYPE_GUIDS["method"],
+    TYPE_GUIDS["property"],
+    TYPE_GUIDS["itf_method"],
+)
+
 # Markers inside .st files separating sections.
 IMPL_MARKER = "// === IMPLEMENTATION ==="
 PROPERTY_GET_MARKER = "// === GET ==="
@@ -107,3 +116,8 @@ def is_textual(type_guid):
 def has_implementation(type_guid):
     """True if this object type has a separate implementation section."""
     return type_guid in IMPLEMENTATION_TYPES
+
+
+def is_nested(type_guid):
+    """True if this object lives inside a POU/interface (dotted filename)."""
+    return type_guid in NESTED_TYPES
