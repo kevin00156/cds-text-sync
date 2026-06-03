@@ -364,9 +364,10 @@ def build_project(projects_obj=None):
         log_lines.append(separator)
         log_lines.append(footer)
         
-        # Write to build_[AppName].log in base directory
+        # Write to build_[AppName].log in base directory (debug mode only)
+        from codesys_utils import is_debug
         base_dir, _ = load_base_dir()
-        if base_dir and os.path.exists(base_dir):
+        if base_dir and os.path.exists(base_dir) and is_debug():
             # Sanitize app name for filename
             clean_app_name = "".join([c if c.isalnum() or c in ("-", "_") else "_" for c in app_name])
             log_filename = "build_{}.log".format(clean_app_name)

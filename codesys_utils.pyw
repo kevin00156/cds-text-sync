@@ -27,6 +27,7 @@ class Logger:
     def __init__(self):
         self.log_file = None
         self.is_final = False
+        self.debug = False  # Set by init_logging from cds-sync-debug property.
         
     def _initialize(self, base_dir=None):
         # If explicitly providing base_dir, override everything
@@ -74,7 +75,13 @@ class Logger:
             log_entry += traceback.format_exc() + "\n"
             
         print("[%s] %s" % (level, message))
-        
+
+        # Console always shows the message; the log FILE is debug-only so a
+        # normal run leaves no sync_debug.log behind. ERROR always writes so a
+        # real failure is never silent.
+        if not self.debug and level != "ERROR":
+            return
+
         try:
             with codecs.open(self.log_file, "a", "utf-8") as f:
                 f.write(log_entry)
@@ -90,9 +97,10 @@ def log_warning(message):
     _logger.log("WARNING", message)
 
 def init_logging(base_dir):
-    """Explicitly set the logging directory"""
+    """Explicitly set the logging directory and read the debug flag."""
     if base_dir and os.path.exists(base_dir):
         _logger._initialize(base_dir)
+    _logger.debug = is_debug()
 
 def log_error(message, critical=False):
     _logger.log("ERROR", message, include_traceback=True)
@@ -380,6 +388,15 @@ def set_project_prop(key, value):
         return True
     except:
         return False
+
+def is_debug():
+    """True when debug mode (cds-sync-debug project property) is enabled.
+
+    Off by default: a normal run produces only project content, no metadata
+    or log files. Turn it on from Project_parameters.py to get the audit
+    trail (sync_metadata.json) and logs back.
+    """
+    return bool(get_project_prop("cds-sync-debug", False))
 
 def update_application_count_flag():
     """Count internal 'Application' objects and set 'boolean' property to True if > 1."""

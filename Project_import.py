@@ -165,32 +165,33 @@ def import_project(projects_obj=None):
     
     log_info("Import complete! " + summary + " Time elapsed: {:.2f}s".format(elapsed))
     
-    # Update metadata after successful import
+    # Update metadata after successful import (debug mode only)
     try:
         from codesys_constants import SCRIPT_VERSION
-        from codesys_utils import set_project_prop
-        
-        metadata = {
-            "script_version": SCRIPT_VERSION,
-            "last_action": "import",
-            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
-            "duration_sec": round(elapsed, 2),
-            "statistics": {
-                "updated": updated,
-                "created": created,
-                "moved": moved,
-                "deleted": deleted,
-                "failed": failed,
-                "identical": unchanged_count
-            }
-        }
-        
-        metadata_path = os.path.join(base_dir, "sync_metadata.json")
-        with codecs.open(metadata_path, "w", "utf-8") as f:
-            json.dump(metadata, f, indent=2)
-        log_info("Import metadata saved to sync_metadata.json (v" + SCRIPT_VERSION + ")")
-        
+        from codesys_utils import set_project_prop, is_debug
+
+        # Version property lives in the .project (not git), so always record it.
         set_project_prop("cds-sync-version", SCRIPT_VERSION)
+
+        if is_debug():
+            metadata = {
+                "script_version": SCRIPT_VERSION,
+                "last_action": "import",
+                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                "duration_sec": round(elapsed, 2),
+                "statistics": {
+                    "updated": updated,
+                    "created": created,
+                    "moved": moved,
+                    "deleted": deleted,
+                    "failed": failed,
+                    "identical": unchanged_count
+                }
+            }
+            metadata_path = os.path.join(base_dir, "sync_metadata.json")
+            with codecs.open(metadata_path, "w", "utf-8") as f:
+                json.dump(metadata, f, indent=2)
+            log_info("Import metadata saved to sync_metadata.json (v" + SCRIPT_VERSION + ")")
     except Exception as e:
         log_warning("Failed to update metadata: " + safe_str(e))
     

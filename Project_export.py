@@ -374,15 +374,17 @@ def export_project(export_dir, projects_obj=None):
     summary = "Updated: " + str(exported_updated) + ", Created: " + str(exported_new) + ", Removed: " + str(removed_count) + ", Failed: " + str(exported_failed) + " (Identical: " + str(exported_identical) + ")"
     log_info("Export complete! " + summary + " Time elapsed: {:.2f}s".format(elapsed_time))
     
-    # Save export metadata for version tracking
-    save_export_metadata(export_dir, {
-        "new": exported_new,
-        "updated": exported_updated,
-        "identical": exported_identical,
-        "removed": removed_count,
-        "failed": exported_failed,
-        "total": exported_total
-    }, elapsed_time)
+    # Save export metadata for version tracking (debug mode only)
+    from codesys_utils import is_debug
+    if is_debug():
+        save_export_metadata(export_dir, {
+            "new": exported_new,
+            "updated": exported_updated,
+            "identical": exported_identical,
+            "removed": removed_count,
+            "failed": exported_failed,
+            "total": exported_total
+        }, elapsed_time)
     
     # Show completion notification
     try:
