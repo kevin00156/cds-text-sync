@@ -277,10 +277,16 @@ def export_project(export_dir, projects_obj=None):
         try:
             obj_guid = safe_str(obj.guid)
             cached_type = cache_data.get('types', {}).get(obj_guid)
-            if cached_type:
-                effective_type, is_xml = cached_type[0], cached_type[1]
-                rel_path = cached_type[2] if len(cached_type) > 2 else None
-                should_skip = False if rel_path else True
+            cached_rel_path = cached_type[2] if (cached_type and len(cached_type) > 2) else None
+            if cached_rel_path:
+                # Fast path: trust the cache ONLY for objects that previously had
+                # a real path (i.e. were exported). Never trust a cached "skip"
+                # (rel_path None) -- the set of supported types can change between
+                # versions, so always re-classify skipped objects. Otherwise a
+                # once-skipped object stays buried forever even after its type
+                # becomes exportable.
+                effective_type, is_xml, rel_path = cached_type[0], cached_type[1], cached_rel_path
+                should_skip = False
             else:
                 effective_type, is_xml, should_skip = classify_object(obj)
                 rel_path = build_expected_path(obj, effective_type, is_xml) if not should_skip else None

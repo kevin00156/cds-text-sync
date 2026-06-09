@@ -221,7 +221,7 @@ def build_expected_path(obj, effective_type, is_xml):
         obj_type = safe_str(obj.type)
         parent_pou = get_parent_pou_name(obj)
         # Nested objects (Action, Method, Property) prefix filename with parent POU name
-        if parent_pou and obj_type in [TYPE_GUIDS["action"], TYPE_GUIDS["method"], TYPE_GUIDS["property"], TYPE_GUIDS["itf_method"]]:
+        if parent_pou and obj_type in [TYPE_GUIDS["action"], TYPE_GUIDS["method"], TYPE_GUIDS["method_alt"], TYPE_GUIDS["property"], TYPE_GUIDS["itf_method"]]:
             file_name = clean_filename(parent_pou) + "." + clean_name + ".st"
             clean_parent_pou = clean_filename(parent_pou)
             # If the path already has the parent name as a folder, remove it to avoid redundancy
@@ -478,7 +478,7 @@ def classify_object(obj):
             pass
 
     # Graphical POU detection (LD, CFC, FBD → XML)
-    if not is_xml and effective_type in [TYPE_GUIDS["pou"], TYPE_GUIDS["action"], TYPE_GUIDS["method"]]:
+    if not is_xml and effective_type in [TYPE_GUIDS["pou"], TYPE_GUIDS["action"], TYPE_GUIDS["method"], TYPE_GUIDS["method_alt"]]:
         try:
             if is_graphical_pou(obj):
                 is_xml = True

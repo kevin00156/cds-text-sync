@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 ---
 
+### Version k1.0.1 (2026-06-09)
+
+**Fixes for silently-dropped objects on export/import:**
+
+- **Corrected/added object type GUIDs for CODESYS SP21 P4**: `classify_object` silently skips any object whose `obj.type` GUID is unknown, so several objects vanished from export with no warning (and were then deleted as false "orphans"). Discovered via `Project_discover.py` and fixed:
+  - `persistent_gvl` corrected to `261bd6e6-…` — the hardcoded `3183921b-…` never matched a real object, so **Persistent Variable lists (PersistentVars) were never exported**.
+  - Added `method_alt` (`62ebfd1c-…`), a second Method GUID SP21 emits (e.g. `Main`/`Init`), treated exactly like a method.
+  - Added `enum` (`40989022-…`), an Enumeration DUT variant, exported as a textual `.st`.
+- **Sync cache no longer permanently buries skipped objects**: both the export loop (`Project_export.py`) and the compare/import loop (`codesys_compare_engine.pyw`) trusted a cached "skip" decision (`rel_path=None`) and never re-classified, so the GUID fixes above had no effect until the cache was manually deleted — and on import the stale skip could delete the disk file as a false orphan. The cache fast path is now used only for objects that previously had a real path; skipped objects are always re-classified, so newly-supported types self-heal without clearing the cache.
+- **Encoding fix**: removed a non-ASCII character from `Project_export.py` (a headerless entry script parsed as ASCII by IronPython).
+
 ### Version 1.7.3 (2026-04-02)
 
 **Move/Rename Detection & Stale File Cleanup:**

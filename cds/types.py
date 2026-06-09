@@ -11,8 +11,10 @@ TYPE_GUIDS = {
     "pou": "6f9dac99-8de1-4efc-8465-68ac443b7d08",
     "gvl": "ffbfa93a-b94d-45fc-a329-229860183b1d",
     "dut": "2db5746d-d284-4425-9f7f-2663a34b0ebc",
+    "enum": "40989022-e4d2-4dc7-89d2-9a412930b20e",  # Enumeration DUT variant on SP21 P4; textual decl like dut
     "action": "8ac092e5-3128-4e26-9e7e-11016c6684f2",
     "method": "f8a58466-d7f6-439f-bbb8-d4600e41d099",
+    "method_alt": "62ebfd1c-d342-43e5-8efb-f22b6d8e4a04",  # Alternate Method GUID on SP21 P4; treat like method
     "property": "5a3b8626-d3e9-4f37-98b5-66420063d91e",
     "property_accessor": "792f2eb6-721e-4e64-ba20-bc98351056db",
     "folder": "738bea1e-99bb-4f04-90bb-a7a567e74e3a",
@@ -27,7 +29,7 @@ TYPE_GUIDS = {
     "nvl_sender": "ffb96994-3252-4467-8507-6a1883584989",
     "nvl_receiver": "ea9e7828-b80c-4ec7-9f68-52210f019623",
     "param_list": "f89f7675-27f3-455b-b98a-243e8673a5a8",
-    "persistent_gvl": "3183921b-cc91-4712-9781-c3b6555122b5",
+    "persistent_gvl": "261bd6e6-249c-4232-bb6f-84c2fbeef430",  # PersistentVars; verified on SP21 P4 (old 3183921b never matched)
     "recipe_manager": "47225134-2e90-48e0-a42e-9ed7cf91c010",
     "recipe": "3e9a7218-1e43-4f9e-a0e2-656f4d36e8b4",
     "visu": "f18bec89-9fef-401d-9953-2f11739a6808",
@@ -65,9 +67,11 @@ TEXTUAL_TYPES = (
     TYPE_GUIDS["pou"],
     TYPE_GUIDS["gvl"],
     TYPE_GUIDS["dut"],
+    TYPE_GUIDS["enum"],
     TYPE_GUIDS["itf"],
     TYPE_GUIDS["action"],
     TYPE_GUIDS["method"],
+    TYPE_GUIDS["method_alt"],
     TYPE_GUIDS["property"],
     TYPE_GUIDS["param_list"],
     TYPE_GUIDS["persistent_gvl"],
@@ -81,6 +85,7 @@ IMPLEMENTATION_TYPES = (
     TYPE_GUIDS["pou"],
     TYPE_GUIDS["action"],
     TYPE_GUIDS["method"],
+    TYPE_GUIDS["method_alt"],
 )
 
 # Markers inside .st files separating sections.

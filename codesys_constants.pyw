@@ -8,15 +8,17 @@ constants used across multiple scripts.
 
 # Script version - single source of truth for version tracking
 # k* = kevin00156's independent fork line (diverged from upstream after old base)
-SCRIPT_VERSION = "k1.0.0"
+SCRIPT_VERSION = "k1.0.1"
 
 # Object type GUIDs for reference
 TYPE_GUIDS = {
     "pou": "6f9dac99-8de1-4efc-8465-68ac443b7d08",           # PROGRAM, FUNCTION, FUNCTION_BLOCK
     "gvl": "ffbfa93a-b94d-45fc-a329-229860183b1d",           # Global Variable List
     "dut": "2db5746d-d284-4425-9f7f-2663a34b0ebc",           # Data Types (STRUCT, ENUM, etc.)
+    "enum": "40989022-e4d2-4dc7-89d2-9a412930b20e",          # Enumeration DUT variant seen on SP21 P4 (e.g. enumStateMachine_States); textual, decl-only like dut
     "action": "8ac092e5-3128-4e26-9e7e-11016c6684f2",        # Action
     "method": "f8a58466-d7f6-439f-bbb8-d4600e41d099",        # Method
+    "method_alt": "62ebfd1c-d342-43e5-8efb-f22b6d8e4a04",    # Alternate Method GUID seen on SP21 P4 (e.g. BaseStateMachine.Main/Init); treat exactly like method
     "property": "5a3b8626-d3e9-4f37-98b5-66420063d91e",      # Property
     "property_accessor": "792f2eb6-721e-4e64-ba20-bc98351056db", # Property Get/Set
     "folder": "738bea1e-99bb-4f04-90bb-a7a567e74e3a",        # Folder
@@ -31,7 +33,7 @@ TYPE_GUIDS = {
     "nvl_sender": "ffb96994-3252-4467-8507-6a1883584989",    # Network Variable List (Sender)
     "nvl_receiver": "ea9e7828-b80c-4ec7-9f68-52210f019623",  # Network Variable List (Receiver)
     "param_list": "f89f7675-27f3-455b-b98a-243e8673a5a8",    # Parameter List
-    "persistent_gvl": "3183921b-cc91-4712-9781-c3b6555122b5",# Persistent GVL
+    "persistent_gvl": "261bd6e6-249c-4232-bb6f-84c2fbeef430",# Persistent GVL (PersistentVars). Verified via Project_discover on SP21 P4; old 3183921b never matched a real object.
     "recipe_manager": "47225134-2e90-48e0-a42e-9ed7cf91c010",# Recipe Manager
     "recipe": "3e9a7218-1e43-4f9e-a0e2-656f4d36e8b4",         # Recipe
     "visu": "f18bec89-9fef-401d-9953-2f11739a6808",           # Visualization
@@ -65,7 +67,9 @@ TYPE_GUIDS = {
 EXPORTABLE_TYPES = [
     TYPE_GUIDS["pou"],
     TYPE_GUIDS["gvl"],
+    TYPE_GUIDS["persistent_gvl"],  # Persistent GVL (PersistentVars) - textual decl like a regular GVL
     TYPE_GUIDS["dut"],
+    TYPE_GUIDS["enum"],            # Enumeration DUT variant (SP21 P4) - textual decl like a dut
     TYPE_GUIDS["itf"],
     TYPE_GUIDS["nvl_sender"],
     TYPE_GUIDS["nvl_receiver"],
@@ -97,6 +101,7 @@ EXPORTABLE_TYPES = [
     TYPE_GUIDS["device_module"],      # Discovered from auxiliary data
     TYPE_GUIDS["action"],
     TYPE_GUIDS["method"],
+    TYPE_GUIDS["method_alt"],      # Alternate Method GUID (SP21 P4) - treated exactly like method
     TYPE_GUIDS["itf_method"],
     TYPE_GUIDS["property"],
     TYPE_GUIDS["property_accessor"],
@@ -109,6 +114,7 @@ IMPLEMENTATION_TYPES = [
     TYPE_GUIDS["pou"],
     TYPE_GUIDS["action"],
     TYPE_GUIDS["method"],
+    TYPE_GUIDS["method_alt"],  # Alternate Method GUID (SP21 P4) - carries decl + impl like method
 ]
 
 # Types that should be exported as native XML

@@ -197,30 +197,29 @@ def find_all_changes(base_dir, projects_obj, export_xml=False):
         
         # Check type cache first to avoid classify_object AND path building
         # Cache stores (eff_type, is_xml, cached_rel_path)
-        if obj_guid in cached_types:
-            type_info = cached_types[obj_guid]
-            eff_type, is_xml = type_info[0], type_info[1]
-            cached_rel_path = type_info[2] if len(type_info) > 2 else None
-            should_skip = False if cached_rel_path else True
-            
-            if cached_rel_path:
-                # Validate cached path: rebuild the real path from the live IDE tree.
-                # If the object was moved/renamed in IDE, the cached path is stale.
-                fresh_path = build_expected_path(obj, eff_type, is_xml)
-                if fresh_path and fresh_path != cached_rel_path:
-                    # Path changed in IDE — invalidate cached path
-                    rel_path = fresh_path
-                    path_invalidations += 1
-                    log_info("Path invalidated for GUID %s: '%s' -> '%s'" % (obj_guid, cached_rel_path, fresh_path))
-                else:
-                    rel_path = cached_rel_path
-                    path_cache_hits += 1
-        else:
-            eff_type, is_xml, should_skip = classify_object(obj)
-            if not should_skip:
-                rel_path = build_expected_path(obj, eff_type, is_xml)
+        cached_info = cached_types.get(obj_guid)
+        cached_rel_path = cached_info[2] if (cached_info and len(cached_info) > 2) else None
+        if cached_rel_path:
+            # Fast path: trust the cache ONLY for objects that previously had a
+            # real path (i.e. were exported). Validate it against the live tree
+            # in case the object was moved/renamed in IDE.
+            eff_type, is_xml = cached_info[0], cached_info[1]
+            should_skip = False
+            fresh_path = build_expected_path(obj, eff_type, is_xml)
+            if fresh_path and fresh_path != cached_rel_path:
+                # Path changed in IDE — invalidate cached path
+                rel_path = fresh_path
+                path_invalidations += 1
+                log_info("Path invalidated for GUID %s: '%s' -> '%s'" % (obj_guid, cached_rel_path, fresh_path))
             else:
-                rel_path = None
+                rel_path = cached_rel_path
+                path_cache_hits += 1
+        else:
+            # Cache miss OR a cached "skip" (rel_path None): always re-classify so
+            # newly-supported types aren't buried forever by a stale skip decision
+            # (which here would also get the disk file deleted as a false orphan).
+            eff_type, is_xml, should_skip = classify_object(obj)
+            rel_path = build_expected_path(obj, eff_type, is_xml) if not should_skip else None
 
         # ── CRITICAL: honor the same export_xml gate that export uses ──
         # Export does NOT write XML-type objects to disk when export_xml is off
