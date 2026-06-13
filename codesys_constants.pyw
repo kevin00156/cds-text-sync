@@ -8,7 +8,7 @@ constants used across multiple scripts.
 
 # Script version - single source of truth for version tracking
 # k* = kevin00156's independent fork line (diverged from upstream after old base)
-SCRIPT_VERSION = "k1.0.1"
+SCRIPT_VERSION = "k1.0.2"
 
 # Object type GUIDs for reference
 TYPE_GUIDS = {

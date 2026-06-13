@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 
 ---
 
+### Version k1.0.2 (2026-06-13)
+
+**Fix for objects silently imported into a phantom folder when the device name differs:**
+
+- **Device-name remap on import**: Every device-contained object's path begins with the device name (from `get_container_prefix`). When an export made under one device name (e.g. `CODESYS_Control_for_Linux_SL`) was imported into a project whose device had a different name (e.g. `Device`), `find_object_by_path`/`ensure_folder_path` failed to resolve the leading segment and **silently created a bogus top-level folder** named after the export's device, nesting every imported object *outside* the real device. The objects existed in the project (so `Project_compare` saw them via the recursive scan) but never appeared under the device in the IDE — the "imported fine but nothing shows up" symptom. The workaround was to manually rename the IDE device to match the export.
+  - `perform_import_items` now reconciles the device name: `build_device_remap` detects a renamed device by structurally confirming the second path level (e.g. `Application`) against the IDE's actual device(s), then rewrites the leading segment of every import path onto the real device (`apply_device_remap`). The absolute on-disk file path is never rewritten.
+  - The remap is **fail-safe**: a segment is only remapped when it can be positively tied to exactly one device, so genuine project-global top-level folders are left alone and ambiguous multi-device cases are skipped (with a warning) rather than guessed.
+  - `Project_import.py` now surfaces the detected mismatch in the final confirmation dialog (`[!] Device remap (export -> IDE): …`) instead of remapping silently.
+  - Regression tests added in `tests/test_device_remap.py`.
+
 ### Version k1.0.1 (2026-06-09)
 
 **Fixes for silently-dropped objects on export/import:**

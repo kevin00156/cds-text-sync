@@ -41,7 +41,9 @@ from codesys_utils import (
     resolve_projects, get_project_prop, backup_project_binary,
     check_version_compatibility, finalize_sync_operation, create_safety_backup
 )
-from codesys_compare_engine import find_all_changes, perform_import_items
+from codesys_compare_engine import (
+    find_all_changes, perform_import_items, build_device_remap, summarize_device_remap
+)
 
 
 
@@ -136,11 +138,25 @@ def import_project(projects_obj=None):
         action = "delete" if item.get("is_orphan") else item["type"]
         print("  <- " + item["path"] + " (" + action + ")")
     
+    # Detect device-name mismatch so we can warn the user up-front instead of
+    # silently nesting everything under a phantom top-level folder.
+    device_remap = build_device_remap(projects_obj.primary, to_import)
+    remap_lines = summarize_device_remap(to_import, device_remap)
+    if remap_lines:
+        warn = "Device name mismatch detected.\n\n" \
+               "The export was made under a different device name than this " \
+               "project's device. Import paths will be remapped onto the real " \
+               "device so objects land correctly:\n  " + "\n  ".join(remap_lines)
+        print(warn)
+        log_warning("Device remap on import: " + "; ".join(remap_lines))
+
     # Final confirmation before touching the IDE
     from codesys_ui import ask_yes_no
     confirm_msg = "Ready to import {} changes into the IDE.\n\nModified: {}\nNew on disk: {}\nDelete orphans: {}\n\nProceed?".format(
         len(to_import), len(different), len(new_on_disk), len(new_in_ide)
     )
+    if remap_lines:
+        confirm_msg += "\n\n[!] Device remap (export -> IDE):\n  " + "\n  ".join(remap_lines)
     if not ask_yes_no("Confirm Import", confirm_msg):
         print("Import cancelled by user.")
         return

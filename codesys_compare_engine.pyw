@@ -24,6 +24,7 @@ from codesys_utils import (
     resolve_projects, backup_project_binary, merge_native_xmls,
     parse_st_file, build_object_cache, find_object_by_path,
     ensure_folder_path, determine_object_type, find_object_by_name,
+    _find_child_transparent,
     format_st_content, format_property_content, get_project_prop,
     load_sync_cache, save_sync_cache, normalize_path, get_quick_ide_hash
 )
@@ -590,10 +591,33 @@ def create_new_object(rel_path, file_path, import_managers, name_map,
         parent_name = parts[0]
         child_name = parts[1]
         log_info("Looking for parent POU: " + parent_name + " for child: " + child_name)
-        log_info("Name map has " + str(len(name_map)) + " entries")
+
+        # Resolve the parent POU using several strategies, in order:
+        #   1. Objects created earlier in this same import session (name_map).
+        #   2. The already-resolved container: the parent POU normally lives
+        #      directly inside it (grouping-folder layout "<FB>/<FB>.Method.st"
+        #      and stripped layout "<FB>.Method.st" both put the FB as a direct
+        #      child of `container`), or the container may BE the parent FB.
+        #   3. Legacy path lookup for an extra nested-folder layout.
         pou_parent = find_object_by_name(parent_name, name_map)
+
+        if not pou_parent:
+            try:
+                if hasattr(container, "get_name") and container.get_name() == parent_name:
+                    pou_parent = container
+            except:
+                pass
+        if not pou_parent:
+            pou_parent = _find_child_transparent(container, parent_name)
+
+        if not pou_parent:
+            parent_path = "/".join(path_parts[:-1])
+            parent_path_with_name = parent_path + "/" + parent_name
+            log_info("Parent '" + parent_name + "' not in container, trying path: " + parent_path_with_name)
+            pou_parent = find_object_by_path(parent_path_with_name, project)
+
         if pou_parent:
-            log_info("Found parent POU by name: " + safe_str(pou_parent))
+            log_info("Found parent POU: " + safe_str(pou_parent))
             name = child_name
             container = pou_parent
             # If type_guid wasn't determined, infer from child name patterns
@@ -605,26 +629,12 @@ def create_new_object(rel_path, file_path, import_managers, name_map,
                     # Default to action for unknown nested children
                     type_guid = TYPE_GUIDS.get("action")
         else:
-            # Try to find parent by path as fallback
-            parent_path = "/".join(path_parts[:-1])
-            parent_path_with_name = parent_path + "/" + parent_name
-            log_warning("Parent '" + parent_name + "' not found by name, trying path: " + parent_path_with_name)
-            pou_parent = find_object_by_path(parent_path_with_name, project)
-            if pou_parent:
-                log_info("Found parent POU by path: " + safe_str(pou_parent))
-                name = child_name
-                container = pou_parent
-                # If type_guid wasn't determined, infer from child name patterns
-                if not type_guid or type_guid == TYPE_GUIDS.get("pou"):
-                    upper_child = child_name.upper()
-                    if upper_child in ("GET", "SET"):
-                        type_guid = TYPE_GUIDS.get("property_accessor")
-                    else:
-                        # Default to action for unknown nested children
-                        type_guid = TYPE_GUIDS.get("action")
-            else:
-                log_warning("Could not find parent POU '" + parent_name + "' by name or path. Will use full name: " + name)
-    
+            # Never fall back to creating a POU with a dotted name — CODESYS
+            # rejects object names containing '.'. Skip and report instead.
+            log_error("Could not find parent POU '" + parent_name + "' for child '" +
+                      child_name + "' (" + rel_path + "). Skipping to avoid invalid dotted-name object.")
+            return None
+
     manager = resolve_manager(import_managers, type_guid, rel_path)
     res = manager.create(container, name, file_path, type_guid)
     
@@ -919,11 +929,151 @@ def finalize_import(project, projects_obj, base_dir, updated_count, created_coun
             print("  Skipping project save (user option).")
 
 
+def order_st_files_parents_first(items):
+    """Order ST import items so a parent POU is created before its nested children.
+
+    A nested child file is named "<Parent>.<Child>.st" (one extra dot in the base
+    name) and depends on its parent "<Parent>.st" existing first. Sorting by
+    base-name dot-count (stable) yields "<FB>.st" before "<FB>.Method.st" before
+    "<FB>.Prop.Get.st", regardless of disk-scan order. Returns a new list.
+    """
+    def depth(item):
+        base = os.path.splitext(item.get("path", "").replace("\\", "/").split("/")[-1])[0]
+        return base.count(".")
+    return sorted(items, key=depth)
+
+
+# ═══════════════════════════════════════════════════════════════════
+#  DEVICE-NAME REMAP (import safety)
+# ═══════════════════════════════════════════════════════════════════
+
+def build_device_remap(project, to_sync):
+    """Map an export's device-folder names onto the IDE's actual device names.
+
+    The first path segment of any device-contained object IS the device name
+    (see get_container_prefix). When an export made under device 'A' is imported
+    into a project whose device is now named 'B', every disk path still begins
+    with 'A/...'. find_object_by_path / ensure_folder_path then fail to locate
+    'A' under the project root and SILENTLY create a bogus top-level folder 'A',
+    nesting every object outside the real device. The objects exist in the
+    project (compare's recursive scan sees them) but are invisible under the
+    device in the IDE — exactly the "imported but nothing shows up" symptom.
+
+    Returns {leading_segment_lower: real_device_name} for segments that can be
+    positively tied to a device, and {} when nothing needs remapping.
+
+    A segment is only remapped when an IDE device already contains a child that
+    matches the segment's second path level (e.g. 'Application'). That structural
+    confirmation is what distinguishes a renamed device from a legitimate new
+    project-global top-level folder (whose second level is a plain file), so we
+    never wrongly bury a global pool inside a device.
+    """
+    try:
+        root_children = project.get_children()
+    except Exception:
+        return {}
+
+    root_names_lower = set()
+    devices = []  # (name, obj)
+    for child in root_children:
+        try:
+            root_names_lower.add(safe_str(child.get_name()).lower())
+            if safe_str(child.type) == TYPE_GUIDS["device"]:
+                devices.append((safe_str(child.get_name()), child))
+        except Exception:
+            continue
+
+    if not devices:
+        return {}
+
+    # Distinct leading segments of the import paths, with the set of second-level
+    # segments seen under each (used to structurally confirm a device match).
+    leading_display = {}   # lead_lower -> original-cased leading segment
+    second_levels = {}     # lead_lower -> set of second-segment names
+    for item in to_sync:
+        path = item.get("path") or ""
+        parts = [p for p in path.replace("\\", "/").split("/") if p]
+        if not parts:
+            continue
+        lead_l = parts[0].lower()
+        leading_display.setdefault(lead_l, parts[0])
+        if len(parts) >= 2:
+            second_levels.setdefault(lead_l, set()).add(parts[1])
+
+    remap = {}
+    for lead_l, lead_disp in leading_display.items():
+        if lead_l in root_names_lower:
+            continue  # already resolves to a real root child — nothing to do
+
+        # Which IDE devices already contain one of this segment's second levels?
+        matched = []
+        for dev_name, dev_obj in devices:
+            for sec in second_levels.get(lead_l, ()):
+                if _find_child_transparent(dev_obj, sec) is not None:
+                    matched.append(dev_name)
+                    break
+
+        if len(matched) == 1:
+            remap[lead_l] = matched[0]
+        elif len(matched) > 1:
+            log_warning("Device remap ambiguous for export folder '%s': matches "
+                        "IDE devices %s. Leaving paths unchanged." % (lead_disp, matched))
+        # No structural match -> leave unmapped (probably a project-global folder,
+        # or a device whose Application name also differs). Fail safe.
+
+    return remap
+
+
+def remap_path_device(path_str, remap):
+    """Rewrite the leading device segment of an IDE path using a device remap.
+
+    Only the first segment is touched; the absolute on-disk file path is never
+    remapped (the file genuinely lives under the export's device folder).
+    """
+    if not path_str or not remap:
+        return path_str
+    parts = path_str.replace("\\", "/").split("/")
+    if parts and parts[0].lower() in remap:
+        parts[0] = remap[parts[0].lower()]
+        return "/".join(parts)
+    return path_str
+
+
+def apply_device_remap(to_sync, remap):
+    """Rewrite logical IDE path fields of every import item in place.
+
+    Touches 'path', 'disk_path' and 'ide_path' (all device-prefixed IDE paths),
+    but never 'file_path' (the real disk location of the file being read).
+    """
+    if not remap:
+        return
+    for item in to_sync:
+        for key in ("path", "disk_path", "ide_path"):
+            if item.get(key):
+                item[key] = remap_path_device(item[key], remap)
+
+
+def summarize_device_remap(to_sync, remap):
+    """Return readable 'OldFolder -> NewDevice' lines for an applied remap.
+
+    The remap is keyed by lowercased segment; this recovers the original-cased
+    export folder name from the import paths for display.
+    """
+    if not remap:
+        return []
+    old_display = {}
+    for item in to_sync:
+        parts = [p for p in (item.get("path") or "").replace("\\", "/").split("/") if p]
+        if parts:
+            key = parts[0].lower()
+            if key in remap and key not in old_display:
+                old_display[key] = parts[0]
+    return ["%s -> %s" % (old_display.get(key, key), new) for key, new in remap.items()]
+
+
 # ═══════════════════════════════════════════════════════════════════
 #  HIGH-LEVEL IMPORT ORCHESTRATOR
-    # ═══════════════════════════════════════════════════════════════════
-    #  HIGH-LEVEL IMPORT ORCHESTRATOR
-    # ═══════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════
 
 def perform_import_items(primary_project, base_dir, to_sync, globals_ref=None):
     """
@@ -944,16 +1094,30 @@ def perform_import_items(primary_project, base_dir, to_sync, globals_ref=None):
     import_managers = create_import_managers()
     folder_cache = {}
     name_map = {}
-    
+
     updated_count = 0
     created_count = 0
     deleted_count = 0
     failed_count = 0
     moved_count = 0
-    
+
     native_batches = {}
     st_files_to_import = []
     pou_children_info = {}
+
+    # ── Device-name reconciliation ──
+    # If the export was made under a different device name than the IDE's current
+    # device, rewrite the leading device segment of every import path onto the
+    # real device. Without this, new objects get created in a phantom top-level
+    # folder named after the old device and never appear under the device.
+    device_remap = build_device_remap(primary_project, to_sync)
+    if device_remap:
+        for line in summarize_device_remap(to_sync, device_remap):
+            msg = ("Device name mismatch (export -> IDE): %s. "
+                   "Remapping import paths onto the real device." % line)
+            print("  " + msg)
+            log_warning(msg)
+        apply_device_remap(to_sync, device_remap)
     
     # ═══════════════════════════════════════════════════════════════════
     #  PASS 1: Collect XML batches and ST files, save POU children
@@ -1083,7 +1247,12 @@ def perform_import_items(primary_project, base_dir, to_sync, globals_ref=None):
     # ═══════════════════════════════════════════════════════════════════
     #  PASS 4: Import ST files (after POUs exist)
     # ═══════════════════════════════════════════════════════════════════
-    
+
+    # Create parents before their nested children (methods/actions/properties),
+    # otherwise a child's "<FB>.<Child>.st" may be processed before "<FB>.st" and
+    # fail to find its parent POU.
+    st_files_to_import = order_st_files_parents_first(st_files_to_import)
+
     for item in st_files_to_import:
         try:
             rel_path = item["path"]
