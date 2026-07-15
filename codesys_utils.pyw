@@ -20,6 +20,10 @@ import shutil
 _metadata_thread_lock = threading.Lock()
 from codesys_constants import IMPL_MARKER, FORBIDDEN_CHARS, TYPE_GUIDS, PROPERTY_GET_MARKER, PROPERTY_SET_MARKER, IMPLEMENTATION_TYPES
 
+# Cache version - bump when the cache format or hash semantics change to
+# force a full rebuild
+CACHE_VERSION = "3.1"  # 3.1: ide hashes now include build_properties (exclude_from_build, etc.)
+
 
 # --- Logging System ---
 # --- Logging System ---
@@ -218,17 +222,19 @@ def resolve_system(caller_globals=None):
 def get_quick_ide_hash(obj, is_xml):
     """
     Quickly calculate identification hash from IDE object without full export.
+    Includes build_properties (sync attributes) so attribute-only changes
+    invalidate the cache.
     Returns None if full export is mandatory (e.g. XML types).
     """
     if is_xml:
         return None  # XML requires full export for stable comparison
-        
+
     try:
         obj_type_guid = safe_str(obj.type)
-        
+
         # Extract decl and impl
         decl = obj.textual_declaration.text if hasattr(obj, 'has_textual_declaration') and obj.has_textual_declaration else None
-            
+
         if obj_type_guid == TYPE_GUIDS["property"]:
             # Special Case: Properties combine Get and Set children
             get_impl = None
@@ -245,19 +251,24 @@ def get_quick_ide_hash(obj, is_xml):
                         c_impl = child.textual_implementation.text if child.has_textual_implementation else ""
                         set_impl = format_st_content(c_decl, c_impl)
             except: pass
-            
+
             content = format_property_content(decl, get_impl, set_impl)
-            return calculate_hash(content)
         else:
             # Standard POU/GVL/DUT
             impl = obj.textual_implementation.text if hasattr(obj, 'has_textual_implementation') and obj.has_textual_implementation else None
             if decl is not None or impl is not None:
                 can_have_impl = obj_type_guid in IMPLEMENTATION_TYPES
                 content = format_st_content(decl, impl, can_have_impl)
-                return calculate_hash(content)
+            else:
+                return None
+
+        # Include build attributes in the hash so attribute-only changes
+        # (like toggling Exclude from build) invalidate the cache
+        attrs = read_ide_attrs(obj)
+        return build_state_hash(content, attrs)
     except Exception as e:
         log_warning("Quick hash failed: " + str(e))
-        
+
     return None
 
 
@@ -790,30 +801,258 @@ def parse_property_content(content):
 # Removed save_metadata (metadata files no longer used)
 
 
-def parse_st_file(file_path):
+# --- Sync Pragma API ---
+# ONE mechanism for every //% cds-text-sync.<key>=<value> pragma line at the
+# top of a .st file: build attributes (ATTR_REGISTRY) and the kind pragma
+# both go through parse_sync_pragmas / render_sync_pragmas.
+
+def parse_sync_pragmas(content):
+    """Parse leading cds-text-sync pragma lines from file content.
+
+    Returns:
+        (pragmas, clean_st)
+        - pragmas: dict {key: value-string}, e.g. {"exclude_from_build":
+          "true", "kind": "persistent_gvl"}
+        - clean_st: content with the pragma block removed
     """
-    Parse an ST file and extract declaration and implementation sections.
-    Returns tuple (declaration, implementation).
+    from codesys_constants import SYNC_PRAGMA_PREFIX
+    lines = content.split("\n")
+    pragmas = {}
+    first_non_pragma = 0
+
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped.startswith(SYNC_PRAGMA_PREFIX):
+            kv = stripped[len(SYNC_PRAGMA_PREFIX):]
+            if "=" in kv:
+                key, val = kv.split("=", 1)
+                pragmas[key.strip()] = val.strip()
+            first_non_pragma = i + 1
+        elif stripped == "":
+            if not pragmas:
+                break
+            first_non_pragma = i + 1
+        else:
+            break
+
+    clean_st = "\n".join(lines[first_non_pragma:])
+    clean_st = clean_st.lstrip("\n")
+    return pragmas, clean_st
+
+
+def attrs_from_pragmas(pragmas):
+    """Filter a pragma dict down to boolean build attributes.
+
+    Returns {attr_key: True} for ATTR_REGISTRY keys whose value is 'true' -
+    the shape read_ide_attrs/write_ide_attrs/normalize_sync_attrs work with.
+    """
+    from codesys_constants import ATTR_REGISTRY
+    attrs = {}
+    for key, val in pragmas.items():
+        if key in ATTR_REGISTRY and str(val).strip().lower() == "true":
+            attrs[key] = True
+    return attrs
+
+
+def render_sync_pragmas(pragmas, clean_st):
+    """Render sync pragmas + clean ST content to final file content.
+
+    Args:
+        pragmas: dict that may contain "kind" (string) and boolean build
+                 attributes ({"exclude_from_build": True, ...})
+        clean_st: ST content without pragmas
+    Returns:
+        Final file content string
+    """
+    from codesys_constants import ATTR_ORDER, SYNC_PRAGMA_PREFIX
+    pragma_lines = []
+    if pragmas.get("kind"):
+        pragma_lines.append("%skind=%s" % (SYNC_PRAGMA_PREFIX, pragmas["kind"]))
+    for key in ATTR_ORDER:
+        if pragmas.get(key):
+            pragma_lines.append("%s%s=true" % (SYNC_PRAGMA_PREFIX, key))
+
+    if pragma_lines:
+        return "\n".join(pragma_lines) + "\n\n" + clean_st
+    return clean_st
+
+
+def normalize_sync_attrs(attrs):
+    """Normalize attrs dict to a stable, hashable tuple.
+
+    Only includes keys from ATTR_ORDER that are True.
+    Returns a tuple of sorted (key, True) pairs for deterministic hashing.
+    """
+    from codesys_constants import ATTR_ORDER
+    return tuple((k, True) for k in ATTR_ORDER if attrs.get(k))
+
+
+def build_state_hash(code_content, attrs):
+    """Build combined state hash from code content and attributes.
+
+    Args:
+        code_content: ST code string (already clean, no pragmas)
+        attrs: dict {"exclude_from_build": True, ...}
+    Returns:
+        str: hex hash representing full object state
+    """
+    code_hash = calculate_hash(code_content)
+    attrs_hash = calculate_hash(str(normalize_sync_attrs(attrs)))
+    return calculate_hash(code_hash + "|" + attrs_hash)
+
+
+def read_ide_attrs(obj):
+    """Read supported IDE attributes from live CODESYS object.
+
+    Uses obj.build_properties (ScriptBuildProperties) to access build flags.
+    Uses ATTR_REGISTRY to determine which attributes apply to this object type.
+    Returns dict of {attr_key: True} for non-default attributes.
+    """
+    from codesys_constants import ATTR_REGISTRY
+    obj_type = safe_str(obj.type)
+    obj_name = safe_str(obj.get_name()) if hasattr(obj, "get_name") else "<unknown>"
+    attrs = {}
+
+    applicable = [key for key, spec in ATTR_REGISTRY.items() if obj_type in spec["types"]]
+    if not applicable:
+        return attrs
+
+    # Access the build_properties sub-object (ScriptBuildProperties)
+    build_props = None
+    try:
+        build_props = getattr(obj, "build_properties", None)
+    except Exception as e:
+        if is_debug():
+            log_info("read_ide_attrs: %s has no build_properties: %s" % (obj_name, safe_str(e)))
+
+    if build_props is None:
+        return attrs
+
+    # One-time diagnostic: dump all build_properties attributes (debug only)
+    if is_debug() and not getattr(read_ide_attrs, '_bp_dumped', False):
+        read_ide_attrs._bp_dumped = True
+        try:
+            bp_attrs = [a for a in dir(build_props) if not a.startswith("_")]
+            log_info("BUILD_PROPERTIES DISCOVERY for %s (%s): %s" % (obj_name, obj_type[:8], bp_attrs))
+            for a in bp_attrs:
+                try:
+                    val = getattr(build_props, a)
+                    if not hasattr(val, "__call__"):
+                        log_info("  build_properties.%s = %s" % (a, repr(val)))
+                except Exception as e2:
+                    log_info("  build_properties.%s -> ERROR: %s" % (a, safe_str(e2)))
+        except Exception as e:
+            log_info("BUILD_PROPERTIES DISCOVERY failed: %s" % safe_str(e))
+
+    for key, spec in ATTR_REGISTRY.items():
+        if obj_type not in spec["types"]:
+            continue
+        prop_name = spec["api_prop"]
+        try:
+            # Check if this property is valid for this object type
+            valid_check = prop_name + "_is_valid"
+            if hasattr(build_props, valid_check):
+                if not getattr(build_props, valid_check):
+                    continue
+
+            if hasattr(build_props, prop_name):
+                val = getattr(build_props, prop_name)
+                if val:
+                    attrs[key] = True
+            # Objects missing an ATTR_REGISTRY member are normal (older
+            # CODESYS / other object flavors) - stay quiet about them.
+        except Exception as e:
+            log_warning("Cannot read attr '%s' from %s: %s" % (key, obj_name, safe_str(e)))
+
+    if attrs and is_debug():
+        log_info("read_ide_attrs: %s -> %s" % (obj_name, list(attrs.keys())))
+    return attrs
+
+
+def write_ide_attrs(obj, attrs):
+    """Apply parsed attributes to a CODESYS IDE object via build_properties.
+
+    Only sets attributes that are supported for this object type per
+    ATTR_REGISTRY. A missing pragma means False (unset), so clearing a pragma
+    on disk clears the flag in the IDE.
+    """
+    from codesys_constants import ATTR_REGISTRY
+    obj_type = safe_str(obj.type)
+    obj_name = safe_str(obj.get_name()) if hasattr(obj, "get_name") else "<unknown>"
+
+    applicable = [key for key, spec in ATTR_REGISTRY.items() if obj_type in spec["types"]]
+    if not applicable:
+        return
+
+    # Access the build_properties sub-object
+    build_props = None
+    try:
+        build_props = getattr(obj, "build_properties", None)
+    except Exception as e:
+        log_warning("write_ide_attrs: %s has no build_properties: %s" % (obj_name, safe_str(e)))
+        return
+
+    if build_props is None:
+        if attrs:
+            log_warning("write_ide_attrs: %s -> build_properties is None, cannot apply attrs" % obj_name)
+        return
+
+    for key, spec in ATTR_REGISTRY.items():
+        if obj_type not in spec["types"]:
+            continue
+
+        prop_name = spec["api_prop"]
+        # Treat missing pragmas as False (unset)
+        target_val = attrs.get(key, False)
+
+        try:
+            # Check if this property is valid for this object type
+            valid_check = prop_name + "_is_valid"
+            if hasattr(build_props, valid_check):
+                if not getattr(build_props, valid_check):
+                    continue
+
+            # Only set it if it actually differs from target (to avoid dirtifying IDE unnecessarily)
+            current_val = getattr(build_props, prop_name)
+            if bool(current_val) != bool(target_val):
+                setattr(build_props, prop_name, target_val)
+                log_info("write_ide_attrs: updated %s.build_properties.%s = %s" % (obj_name, prop_name, target_val))
+        except Exception as e:
+            log_warning("Cannot write attr '%s' on %s: %s" % (key, obj_name, safe_str(e)))
+
+
+def parse_st_file(file_path):
+    """Parse an ST file: strip sync pragmas, then extract declaration and
+    implementation sections.
+
+    Returns tuple (declaration, implementation, pragmas).
+    pragmas is the dict from parse_sync_pragmas (may be empty); use
+    attrs_from_pragmas() to get the boolean build attributes.
     """
     try:
         with codecs.open(file_path, "r", "utf-8") as f:
             content = f.read()
     except Exception as e:
         print("Error reading file " + file_path + ": " + safe_str(e))
-        return None, None
-    
+        return None, None, {}
+
+    content = content.replace('\r\n', '\n').replace('\r', '\n')
+
+    # Strip sync pragmas first
+    pragmas, clean_content = parse_sync_pragmas(content)
+
     declaration = None
     implementation = None
-    
-    if IMPL_MARKER in content:
-        parts = content.split(IMPL_MARKER)
+
+    if IMPL_MARKER in clean_content:
+        parts = clean_content.split(IMPL_MARKER)
         declaration = parts[0].strip()
         implementation = parts[1].strip() if len(parts) > 1 else None
     else:
         # No implementation marker - entire content is declaration
-        declaration = content.strip()
-    
-    return declaration, implementation
+        declaration = clean_content.strip()
+
+    return declaration, implementation, pragmas
 
 
 def build_object_cache(project=None):
@@ -1299,24 +1538,30 @@ def load_sync_cache(base_dir):
     """
     from codesys_constants import PROFILE_HASH
     cache_path = os.path.join(base_dir, "sync_cache.json")
+    empty = {"objects": {}, "folders": {}, "types": {}, "version": CACHE_VERSION}
     if os.path.exists(cache_path):
         try:
             with codecs.open(cache_path, "r", "utf-8") as f:
                 data = json.load(f)
+                cache_version = data.get("version", "1.0")
+                if cache_version != CACHE_VERSION:
+                    log_info("Cache version mismatch (%s vs %s), triggering full rebuild."
+                             % (cache_version, CACHE_VERSION))
+                    return empty
                 if data.get("profile_hash") != PROFILE_HASH:
                     log_info("Sync cache discarded: type profile changed "
                              "(cache=%s, current=%s) - full re-classification."
                              % (data.get("profile_hash"), PROFILE_HASH))
-                else:
-                    return {
-                        "objects": data.get("objects", {}),
-                        "folders": data.get("folders", {}),
-                        "types": data.get("types", {}),
-                        "version": data.get("version", "1.0")
-                    }
+                    return empty
+                return {
+                    "objects": data.get("objects", {}),
+                    "folders": data.get("folders", {}),
+                    "types": data.get("types", {}),
+                    "version": cache_version
+                }
         except Exception as e:
             log_warning("Could not load sync cache: " + safe_str(e))
-    return {"objects": {}, "folders": {}, "types": {}, "version": "2.0"}
+    return empty
 
 
 def save_sync_cache(base_dir, objects_cache, folder_hashes=None, type_cache=None):
@@ -1324,7 +1569,7 @@ def save_sync_cache(base_dir, objects_cache, folder_hashes=None, type_cache=None
     from codesys_constants import PROFILE_HASH
     cache_path = os.path.join(base_dir, "sync_cache.json")
     cache_data = {
-        "version": "2.0",
+        "version": CACHE_VERSION,
         "profile_hash": PROFILE_HASH,
         "created": time.strftime("%Y-%m-%dT%H:%M:%S"),
         "folders": folder_hashes or {},
@@ -1364,6 +1609,46 @@ def check_version_compatibility(base_dir):
             pass
     
     return True, None
+
+
+def save_sync_metadata(base_dir, action, stats, elapsed):
+    """Record the sync version and (in debug mode) sync_metadata.json.
+
+    Used by both Project_export.py and Project_import.py. The version
+    property lives in the .project (not git), so it is always recorded -
+    check_version_compatibility depends on it. The metadata file is part of
+    the debug audit trail and only written when debug mode is on (e179ef9
+    policy: a normal run produces only project content).
+
+    Args:
+        base_dir: Export/import directory path
+        action: "export" or "import"
+        stats: Statistics dict
+        elapsed: Elapsed time in seconds (float)
+    """
+    from codesys_constants import SCRIPT_VERSION
+    try:
+        set_project_prop("cds-sync-version", SCRIPT_VERSION)
+    except Exception as e:
+        log_warning("Failed to save version to project property: " + safe_str(e))
+
+    if not is_debug():
+        return
+
+    metadata = {
+        "script_version": SCRIPT_VERSION,
+        "last_action": action,
+        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "duration_sec": round(elapsed, 2),
+        "statistics": stats
+    }
+    metadata_path = os.path.join(base_dir, "sync_metadata.json")
+    try:
+        with codecs.open(metadata_path, "w", "utf-8") as f:
+            json.dump(metadata, f, indent=2)
+        log_info("%s metadata saved to sync_metadata.json (v%s)" % (action.capitalize(), SCRIPT_VERSION))
+    except Exception as e:
+        log_warning("Failed to save %s metadata: %s" % (action, safe_str(e)))
 
 
 def finalize_sync_operation(base_dir, projects_obj, is_import=False):

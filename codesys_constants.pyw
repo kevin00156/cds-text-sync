@@ -224,6 +224,41 @@ EXPORTABLE_TYPES = _expand_kinds(EXPORTABLE_KINDS)
 IMPLEMENTATION_TYPES = _expand_kinds(IMPLEMENTATION_KINDS)
 XML_TYPES = _expand_kinds(XML_KINDS)
 
+# --- Sync Attribute Registry ---
+# Build attributes synced as //% cds-text-sync.<key>=true pragma lines at the
+# top of .st files. Maps attr_key -> the ScriptBuildProperties member that
+# backs it and the kinds that support it (expanded to every alias GUID).
+# Only non-default (True) values are serialized.
+def _attr_types(*kinds):
+    return set(_expand_kinds(kinds))
+
+
+ATTR_REGISTRY = {
+    "exclude_from_build": {
+        "api_prop": "exclude_from_build",
+        "types": _attr_types("pou", "gvl", "dut", "method", "property"),
+    },
+    "link_always": {
+        "api_prop": "link_always",
+        "types": _attr_types("pou", "gvl", "method", "property"),
+    },
+    "external_implementation": {
+        "api_prop": "external_implementation",
+        "types": _attr_types("pou", "dut", "method"),
+    },
+    "enable_system_call": {
+        "api_prop": "enable_system_call",
+        "types": _attr_types("pou", "method", "property"),
+    },
+}
+
+# Deterministic ordering for stable file diffs
+ATTR_ORDER = ["exclude_from_build", "link_always", "external_implementation",
+              "enable_system_call"]
+
+# Sync pragma prefix (shared by build attributes and the kind pragma)
+SYNC_PRAGMA_PREFIX = "//% cds-text-sync."
+
 # Implementation section marker used in ST files
 IMPL_MARKER = "// === IMPLEMENTATION ==="
 
