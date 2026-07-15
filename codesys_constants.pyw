@@ -19,7 +19,7 @@ import zlib
 
 # Script version - single source of truth for version tracking
 # k* = kevin00156's independent fork line (diverged from upstream after old base)
-SCRIPT_VERSION = "k1.0.2"
+SCRIPT_VERSION = "k1.1.0"
 
 # Sync direction policy values allowed in the profile
 _DIRECTION_VALUES = ("bidirectional", "export_only", "import_only", "disabled")

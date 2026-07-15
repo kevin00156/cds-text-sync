@@ -221,7 +221,7 @@ Updates the CODESYS project from the files on disk.
 **Diagnostic tool for project structure.** Maps your CODESYS project tree and helps identify objects that might not be fully supported by the sync engine yet.
 
 - **Validation**: If you run this on a project, check `sync_debug.log` to see a full tree of discovered objects and their types.
-- **Debugging**: Highlights "Unknown" types with their GUIDs, making it easy to report unsupported blocks.
+- **Debugging**: Highlights "Unknown" types with their GUIDs. Add an unknown GUID to `guid_aliases` in `profiles/default.json` (no code change needed) and re-run discovery — see [Type Profiles](#-type-profiles-profilesdefaultjson) below.
 
 ### 7. `Project_resources.py` (Size Analysis)
 
@@ -247,6 +247,35 @@ Updates the CODESYS project from the files on disk.
 
 - **Wait/API Analysis**: Identifies slow spots in the sync process (e.g., slow COM API calls).
 - **Cache Hit Ratio**: Reports how effective the `sync_cache.json` and Merkle Tree skips are for your specific project structure.
+
+---
+
+## 🧬 Type Profiles (`profiles/default.json`)
+
+Object-type GUIDs and per-kind sync policy live in `profiles/default.json`, next to the scripts — **not** in code:
+
+- **`guid_aliases`**: maps each kind (`pou`, `gvl`, `persistent_gvl`, ...) to one or more GUIDs. The *first* GUID is the primary one (used when creating objects); extra entries are aliases for GUID variants other CODESYS versions emit. If `Project_discover.py` reports an unknown GUID, append it to the matching kind's list and re-run — no code change, and the sync cache rebuilds automatically.
+- **`sync_direction`**: per-kind policy — `bidirectional` (default), `export_only` (written to disk for Git visibility but never imported back or deleted from the IDE; e.g. the Library Manager), `import_only`, or `disabled` (invisible to sync; e.g. `device` / `device_module`).
+
+## 🏷️ Sync Pragmas in `.st` Files
+
+Exported files may start with `//% cds-text-sync.<key>=<value>` pragma lines:
+
+- **`kind=<kind>`**: written only for kinds the ST text alone cannot express (persistent GVLs, parameter lists, actions, interface methods) so that importing a file into a project that lacks the object recreates it as the **right kind** — not a guessed POU.
+- **`exclude_from_build` / `link_always` / `external_implementation` / `enable_system_call`**: IDE build attributes (object Properties → Build). They are compared and synced in both directions; deleting a pragma line on disk clears the flag in the IDE on import.
+
+Pragmas are stripped before content comparison, so files without them stay in sync with no noise.
+
+## 🌲 Offline Call Tree (`tools/call_tree.py`)
+
+A standalone CPython tool (no IDE needed) that builds a cross-file call graph from an exported sync directory:
+
+```powershell
+# Text subtree under MAIN, plus full JSON report
+python tools/call_tree.py <sync-dir> MAIN -o call_tree.json
+```
+
+It resolves project functions/FB method calls across files (including FB instances declared in GVLs), tags IEC system calls via `tools/sys_funcs.json`, and marks anything unresolved.
 
 ---
 

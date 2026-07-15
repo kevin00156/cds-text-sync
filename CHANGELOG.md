@@ -4,6 +4,20 @@ All notable changes to this project will be documented in this file.
 
 ---
 
+### Version k1.1.0 (2026-07-15)
+
+**Four upstream features ported as concepts onto the fork's text-first engine** (upstream's 2.x implementations are built on the external-engine/CLI architecture this fork rejected, so these are re-implementations, not merges):
+
+- **JSON type profile** (`profiles/default.json`, from upstream v1.7.5's profile idea):
+  - Object-type GUIDs moved out of `codesys_constants.pyw` into `guid_aliases` — one kind can own several GUIDs (first = primary, rest = version variants). The SP21 P4 GUID differences fixed in k1.0.1 (`method` alt-GUID, enumeration DUT) are now aliases of `method`/`dut` instead of separate kinds, and the old upstream persistent-GVL GUID is tolerated as an alias. Future GUID drift is a JSON edit; `Project_discover.py` points there.
+  - `sync_direction` per kind: `bidirectional` / `export_only` / `import_only` / `disabled`. `library_manager` is `export_only` (generalizes the f7de090 fix — compare never marks non-exported kinds as IDE orphans, import refuses to touch or delete them, loudly); `device`/`device_module` `disabled` replaces the hardcoded exclusion.
+  - `classify_object` normalizes alias GUIDs to the primary; `sync_cache.json` stores a `profile_hash` so any profile edit forces full re-classification (no more stale-skip poisoning). A missing/broken profile fails loud — no silent fallback table.
+- **Build-attribute pragma sync** (manual port of upstream d85381d, v1.7.4): `exclude_from_build`, `link_always`, `external_implementation`, `enable_system_call` sync as `//% cds-text-sync.<attr>=true` header lines in `.st` files, compared both ways and applied via `obj.build_properties` on import (removing the line clears the IDE flag). State hashes include attributes (`CACHE_VERSION` bumped — one-time full rebuild). Also deduplicated the three export cache-skip blocks into `ObjectManager._try_cache_skip`, deleted the dead `batch_import_native_xmls`, unified export/compare manager dicts via `create_import_managers()` (compare's dict was missing `visu_manager`/`device`/`softmotion_pool`), and unified metadata writes in `save_sync_metadata` (version property always recorded; metadata file debug-only).
+- **Kind pragma** (concept from upstream v2.0.1's TypeGuid pragma, reshaped): `//% cds-text-sync.kind=<kind>` is stamped only on files whose kind ST keywords cannot express (persistent GVLs, parameter lists, actions, interface methods) — all other files stay byte-identical. Import lets the pragma win over keyword sniffing and maps the kind name to the *current profile's* primary GUID, so **persistent GVLs deleted from the IDE are recreated as persistent GVLs** (previously they were silently recreated as PROGRAM POUs via the `create_pou` fallback; when no scriptable creation API exists the import now fails with an explicit message instead). Same parser as the attribute pragmas — one mechanism. Kind mismatches between disk and IDE are warned, never auto-fixed.
+- **Offline call-tree tool** (`tools/call_tree.py`, extracted from upstream f09c438): standalone CPython, builds a cross-file call graph from the exported `.st` projections — `python tools/call_tree.py <sync-dir> [root-pou] [-o out.json]`. Resolves FB-method calls through local/global/GVL instance types, tags IEC built-ins via `tools/sys_funcs.json`, renders a text subtree with recursion guards.
+
+Migration: first compare/export after upgrading runs the slow path once (cache version + profile hash changed), rewrites only ambiguous-kind and attribute-bearing files, then Merkle-speed returns. Existing pragma-less exports compare clean. Tests: 118 (golden-equivalence tests pin the generated GUID tables to the k1.0.2 literals).
+
 ### Version k1.0.2 (2026-06-13)
 
 **Fix for objects silently imported into a phantom folder when the device name differs:**
