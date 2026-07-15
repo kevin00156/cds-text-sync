@@ -355,6 +355,14 @@ def find_all_changes(base_dir, projects_obj, export_xml=False):
             if not is_xml and disk_content:
                 disk_pragmas, _ = parse_sync_pragmas(disk_content)
                 disk_attrs = attrs_from_pragmas(disk_pragmas)
+                # A kind mismatch is reported, never auto-fixed: recreating
+                # an object as another kind would destroy IDE-side state.
+                disk_kind = disk_pragmas.get("kind")
+                if disk_kind and kind_of(disk_kind) != kind_of(eff_type):
+                    log_warning("Kind mismatch for %s: disk pragma says '%s' "
+                                "but the IDE object is '%s'. Fix the pragma or "
+                                "the IDE object manually."
+                                % (rel_path, disk_kind, kind_of(eff_type) or eff_type))
 
             if contents_are_equal(ide_content, disk_content, is_xml, rel_path, ide_attrs, disk_attrs):
                 unchanged_count += 1
@@ -614,16 +622,30 @@ def create_new_object(rel_path, file_path, import_managers, name_map,
     content_check = decl if decl else impl
     if not content_check:
         return None
-    
+
+    # The kind pragma wins over keyword sniffing: it carries the object
+    # kinds ST syntax alone cannot express (persistent GVL vs plain GVL,
+    # action bodies, ...). The kind name maps to the CURRENT profile's
+    # primary GUID, so files stay portable across CODESYS versions.
     type_guid = determine_object_type(content_check)
-    
+    kind_pragma = pragmas.get("kind")
+    if kind_pragma:
+        pragma_guid = TYPE_GUIDS.get(kind_pragma)
+        if not pragma_guid:
+            log_error("Unknown kind '%s' in pragma of %s - add it to "
+                      "guid_aliases in profiles/default.json. Skipping creation."
+                      % (kind_pragma, rel_path))
+            return None
+        type_guid = pragma_guid
+
     # Handle nested objects (Action, Method, Property)
     # A dotted base_name like "ST_PROGRAMM.ST_ACTION" means it's a child object.
     # We check both: (a) when type_guid indicates a child type, and
     #                 (b) when type_guid is None/unknown but filename has a dot.
     name = base_name
-    nested_types = [TYPE_GUIDS.get("action"), TYPE_GUIDS.get("method"), 
-                    TYPE_GUIDS.get("property"), TYPE_GUIDS.get("property_accessor")]
+    nested_types = [TYPE_GUIDS.get("action"), TYPE_GUIDS.get("method"),
+                    TYPE_GUIDS.get("property"), TYPE_GUIDS.get("property_accessor"),
+                    TYPE_GUIDS.get("itf_method")]
     is_nested = "." in base_name and (
         type_guid in nested_types or       # Known child type (method, property, etc.)
         not type_guid or                   # Unknown type (e.g. action with no keyword)

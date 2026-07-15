@@ -22,7 +22,9 @@ from codesys_constants import IMPL_MARKER, FORBIDDEN_CHARS, TYPE_GUIDS, PROPERTY
 
 # Cache version - bump when the cache format or hash semantics change to
 # force a full rebuild
-CACHE_VERSION = "3.1"  # 3.1: ide hashes now include build_properties (exclude_from_build, etc.)
+# 3.1: ide hashes include build_properties (exclude_from_build, etc.)
+# 3.2: kind pragma - ambiguous-kind files get a one-time header rewrite
+CACHE_VERSION = "3.2"
 
 
 # --- Logging System ---
@@ -838,6 +840,21 @@ def parse_sync_pragmas(content):
     clean_st = "\n".join(lines[first_non_pragma:])
     clean_st = clean_st.lstrip("\n")
     return pragmas, clean_st
+
+
+def needs_kind_pragma(kind, clean_content):
+    """True when keyword sniffing (determine_object_type) would not recover
+    this kind's primary GUID from the ST text alone.
+
+    Such files (persistent GVLs, parameter lists, actions, interface
+    methods, ...) carry a //% cds-text-sync.kind=<kind> pragma so import can
+    reconstruct the right object kind. Unambiguous files (pou/gvl/dut/...)
+    return False and stay byte-identical to pre-pragma exports.
+    """
+    from codesys_constants import TYPE_GUIDS
+    if not kind:
+        return False
+    return determine_object_type(clean_content) != TYPE_GUIDS.get(kind)
 
 
 def attrs_from_pragmas(pragmas):

@@ -14,7 +14,7 @@ from codesys_utils import (
     format_st_content, format_property_content, parse_property_content,
     resolve_projects, is_container_device, get_quick_ide_hash, normalize_path,
     read_ide_attrs, write_ide_attrs, render_sync_pragmas, build_state_hash,
-    parse_sync_pragmas, attrs_from_pragmas
+    parse_sync_pragmas, attrs_from_pragmas, needs_kind_pragma
 )
 from codesys_constants import (
     TYPE_GUIDS, XML_TYPES, EXPORTABLE_TYPES, IMPLEMENTATION_TYPES,
@@ -630,9 +630,16 @@ class POUManager(ObjectManager):
         if not clean_content.strip():
             return False
 
-        # Read IDE attributes and render sync pragmas
+        # Read IDE attributes and render sync pragmas. Kinds the ST text
+        # alone cannot express (persistent GVL, action, ...) also get a kind
+        # pragma so import can recreate the right object kind. The kind is
+        # identity metadata: it goes in the file but NOT in the state hash.
         attrs = read_ide_attrs(obj)
-        content = render_sync_pragmas(attrs, clean_content)
+        pragmas = dict(attrs)
+        obj_kind = kind_of(context.get('effective_type', safe_str(obj.type)))
+        if obj_kind and needs_kind_pragma(obj_kind, clean_content):
+            pragmas["kind"] = obj_kind
+        content = render_sync_pragmas(pragmas, clean_content)
 
         if not os.path.exists(target_dir):
             os.makedirs(target_dir)
@@ -684,7 +691,12 @@ class POUManager(ObjectManager):
 
         obj = None
         try:
-            if type_guid == TYPE_GUIDS["gvl"] and hasattr(container, "create_gvl"):
+            special_kind = kind_of(type_guid) if type_guid else None
+            if special_kind in ("persistent_gvl", "task_local_gvl", "param_list"):
+                obj = self._create_special_gvl(container, name, type_guid, special_kind)
+                if obj is None:
+                    return None
+            elif type_guid == TYPE_GUIDS["gvl"] and hasattr(container, "create_gvl"):
                 obj = container.create_gvl(name)
             elif type_guid == TYPE_GUIDS["dut"] and hasattr(container, "create_dut"):
                 obj = container.create_dut(name)
@@ -744,6 +756,47 @@ class POUManager(ObjectManager):
                 return obj
         except Exception as e:
             log_error("Failed to create " + name + ": " + safe_str(e))
+        return None
+
+    def _create_special_gvl(self, container, name, type_guid, kind):
+        """Create GVL variants that ST syntax alone cannot express
+        (persistent GVL, task-local GVL, parameter list).
+
+        Tries a kind-specific creator if the container exposes one, then the
+        generic typed child API. Fails loud on purpose: before the kind
+        pragma existed these files fell through to the create_pou fallback
+        and were silently created as PROGRAM POUs.
+        """
+        attempted = []
+
+        creator_candidates = {
+            "persistent_gvl": ["create_persistent_gvl"],
+            "task_local_gvl": ["create_task_local_gvl"],
+            "param_list": ["create_parameter_list"],
+        }
+        for creator in creator_candidates.get(kind, []):
+            if hasattr(container, creator):
+                attempted.append(creator)
+                try:
+                    obj = getattr(container, creator)(name)
+                    if obj:
+                        return obj
+                except Exception as e:
+                    log_warning("%s('%s') failed: %s" % (creator, name, safe_str(e)))
+
+        if hasattr(container, "create_child"):
+            attempted.append("create_child")
+            try:
+                obj = container.create_child(name, type_guid)
+                if obj:
+                    return obj
+            except Exception as e:
+                log_warning("create_child('%s', %s) failed: %s" % (name, type_guid, safe_str(e)))
+
+        log_error("Cannot create %s '%s': this CODESYS version exposes no "
+                  "scriptable creation API for that kind (tried: %s). Create "
+                  "the object manually in the IDE, then re-import to fill in "
+                  "its content." % (kind, name, ", ".join(attempted) or "none"))
         return None
 
 class PropertyManager(POUManager):
