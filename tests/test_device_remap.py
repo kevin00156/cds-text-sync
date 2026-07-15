@@ -13,34 +13,17 @@ build_device_remap() must recognise the renamed device (by structural match on
 the second path level, e.g. 'Application') and map it back to the real device,
 while leaving genuine project-global folders alone.
 """
-import importlib.util
-import os
 import sys
-from importlib.machinery import SourceFileLoader
 
 import pytest
 
-REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-
-
-def _load_legacy(module_name):
-    # .pyw is only in importlib's SOURCE_SUFFIXES on Windows, so an explicit
-    # loader is required for spec_from_file_location to work on Linux CI.
-    path = os.path.join(REPO_ROOT, module_name + ".pyw")
-    loader = SourceFileLoader(module_name, path)
-    spec = importlib.util.spec_from_file_location(module_name, path, loader=loader)
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules[module_name] = mod
-    spec.loader.exec_module(mod)
-    return mod
-
 
 @pytest.fixture(scope="module")
-def env():
+def env(legacy_loader):
     for dep in ("codesys_constants", "codesys_utils", "codesys_managers"):
-        _load_legacy(dep)
+        legacy_loader(dep)
     constants = sys.modules["codesys_constants"]
-    engine = _load_legacy("codesys_compare_engine")
+    engine = legacy_loader("codesys_compare_engine")
     return engine, constants.TYPE_GUIDS
 
 

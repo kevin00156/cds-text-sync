@@ -14,7 +14,10 @@ from codesys_utils import (
     format_st_content, format_property_content, parse_property_content,
     resolve_projects, is_container_device, get_quick_ide_hash, normalize_path
 )
-from codesys_constants import TYPE_GUIDS, XML_TYPES, EXPORTABLE_TYPES, IMPLEMENTATION_TYPES, XML_TYPES as XML_TYPES_CONST
+from codesys_constants import (
+    TYPE_GUIDS, XML_TYPES, EXPORTABLE_TYPES, IMPLEMENTATION_TYPES,
+    XML_TYPES as XML_TYPES_CONST, kind_of, sync_direction_of
+)
 
 # --- Helper Functions ---
 
@@ -203,8 +206,8 @@ def get_parent_pou_name(obj):
 
 def build_expected_path(obj, effective_type, is_xml):
     """Build the expected rel_path for an IDE object."""
-    from codesys_constants import TYPE_NAMES, TYPE_GUIDS
-    
+    from codesys_constants import TYPE_NAMES, TYPE_GUIDS, kind_of
+
     container = get_container_prefix(obj)
     path_parts = get_object_path(obj)
     obj_name = obj.get_name()
@@ -218,16 +221,16 @@ def build_expected_path(obj, effective_type, is_xml):
             type_name = TYPE_NAMES.get(effective_type, effective_type[:8])
         file_name = clean_name + "." + type_name + ".xml"
     else:
-        obj_type = safe_str(obj.type)
+        obj_kind = kind_of(safe_str(obj.type))
         parent_pou = get_parent_pou_name(obj)
         # Nested objects (Action, Method, Property) prefix filename with parent POU name
-        if parent_pou and obj_type in [TYPE_GUIDS["action"], TYPE_GUIDS["method"], TYPE_GUIDS["method_alt"], TYPE_GUIDS["property"], TYPE_GUIDS["itf_method"]]:
+        if parent_pou and obj_kind in ("action", "method", "property", "itf_method"):
             file_name = clean_filename(parent_pou) + "." + clean_name + ".st"
             clean_parent_pou = clean_filename(parent_pou)
             # If the path already has the parent name as a folder, remove it to avoid redundancy
             if path_parts and path_parts[-1] == clean_parent_pou:
                 path_parts = path_parts[:-1]
-        elif obj_type == TYPE_GUIDS["folder"]:
+        elif obj_kind == "folder":
             # Folders use their own name as the last part of path
             file_name = ""
         else:
@@ -414,62 +417,62 @@ def classify_object(obj):
         - should_skip: True if object should be ignored (property_accessor, task, etc.)
     """
     obj_type = safe_str(obj.type)
-    effective_type = obj_type
+    kind = kind_of(obj_type)
+    # Normalize alias GUIDs (alternate method/enum variants, ...) onto the
+    # kind's primary GUID so downstream comparisons, filenames and the sync
+    # cache all see one GUID per kind.
+    effective_type = TYPE_GUIDS[kind] if kind else obj_type
     is_xml = False
 
-    # Skip non-exportable
-    if obj_type == TYPE_GUIDS["property_accessor"]:
-        return obj_type, False, True
-    if obj_type == TYPE_GUIDS["task"]:
-        return obj_type, False, True
-    
-    # Hard-exclude devices and modules (feature request: too unstable for XML sync)
-    if obj_type in [TYPE_GUIDS.get("device"), TYPE_GUIDS.get("device_module")]:
-        return obj_type, False, True
+    # Skip structurally non-exportable kinds: accessor content is folded into
+    # the property file; tasks are exported inside task_config's XML.
+    if kind in ("property_accessor", "task"):
+        return effective_type, False, True
+
+    # Per-kind sync policy from profiles/default.json (e.g. device and
+    # device_module are 'disabled' - too unstable for XML sync)
+    if kind and sync_direction_of(kind) == "disabled":
+        return effective_type, False, True
 
     # Skip all children of monolithic containers - they are exported as
     # recursive XML with their parent. Prevents duplicate export/sync.
     # Logic for devices: Containers (PLCs) are NOT monolithic, so we don't
     # skip their children (Applications and sub-devices).
-    monolithic_types = [
-        TYPE_GUIDS["alarm_config"], 
-        TYPE_GUIDS["visu_manager"],
-        TYPE_GUIDS["task_config"],
-        TYPE_GUIDS["softmotion_pool"]
-    ]
+    monolithic_kinds = ("alarm_config", "visu_manager", "task_config",
+                        "softmotion_pool")
     try:
         parent_type = safe_str(obj.parent.type) if hasattr(obj, 'parent') and obj.parent else ""
-        if parent_type in monolithic_types:
-            return obj_type, False, True
-            
+        parent_kind = kind_of(parent_type)
+        if parent_kind in monolithic_kinds:
+            return effective_type, False, True
+
         # Device recursion check:
         # If parent is a device, we only skip if the parent IS a monolithic unit.
-        if parent_type == TYPE_GUIDS["device"]:
+        if parent_kind == "device":
             if not is_container_device(obj.parent):
                 # Parent is functional device (monolithic), so skip children.
-                return obj_type, False, True
+                return effective_type, False, True
     except:
         pass
 
     # Skip per-POU alarm groups/classes — these are auto-generated children of
     # POUs and can't be independently exported. Only alarm groups under the
     # Alarm Configuration tree are valid standalone exports.
-    if obj_type in [TYPE_GUIDS["alarm_group"], TYPE_GUIDS["alarm_class"]]:
+    if kind in ("alarm_group", "alarm_class"):
         try:
-            parent_type = safe_str(obj.parent.type)
-            if parent_type != TYPE_GUIDS["alarm_config"]:
-                return obj_type, False, True
+            if kind_of(safe_str(obj.parent.type)) != "alarm_config":
+                return effective_type, False, True
         except:
             pass
 
     # Skip auto-generated VisualizationStyle objects
     # These are created by CODESYS at multiple locations (Visualization Manager,
     # Application root, project root) and should never be exported/synced.
-    if obj_type == TYPE_GUIDS["visu_style"]:
-        return obj_type, False, True
+    if kind == "visu_style":
+        return effective_type, False, True
 
     # NVL detection: GVL that is actually a Network Variable List
-    if obj_type == TYPE_GUIDS["gvl"]:
+    if kind == "gvl":
         try:
             if is_nvl(obj):
                 effective_type = TYPE_GUIDS["nvl_sender"]
@@ -478,7 +481,7 @@ def classify_object(obj):
             pass
 
     # Graphical POU detection (LD, CFC, FBD → XML)
-    if not is_xml and effective_type in [TYPE_GUIDS["pou"], TYPE_GUIDS["action"], TYPE_GUIDS["method"], TYPE_GUIDS["method_alt"]]:
+    if not is_xml and kind in ("pou", "action", "method"):
         try:
             if is_graphical_pou(obj):
                 is_xml = True

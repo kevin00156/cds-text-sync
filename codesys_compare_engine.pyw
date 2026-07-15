@@ -18,7 +18,11 @@ import os
 import codecs
 import tempfile
 import time
-from codesys_constants import TYPE_GUIDS, EXPORTABLE_TYPES, XML_TYPES, IMPLEMENTATION_TYPES, RESERVED_FILES, TYPE_NAMES
+from codesys_constants import (
+    TYPE_GUIDS, EXPORTABLE_TYPES, XML_TYPES, IMPLEMENTATION_TYPES,
+    RESERVED_FILES, TYPE_NAMES, kind_of, sync_direction_of,
+    kind_allows_export, kind_allows_import
+)
 from codesys_utils import (
     safe_str, calculate_hash, clean_filename, log_info, log_error, log_warning,
     resolve_projects, backup_project_binary, merge_native_xmls,
@@ -234,8 +238,14 @@ def find_all_changes(base_dir, projects_obj, export_xml=False):
                                 TYPE_GUIDS["nvl_sender"],
                                 TYPE_GUIDS["nvl_receiver"]):
                 continue
-            
-        if should_skip or not rel_path: 
+
+        # Per-kind sync direction (profiles/default.json): kinds that are not
+        # exported must never enter the comparison — a missing disk file would
+        # mark them is_orphan and import would delete them from the IDE.
+        if not kind_allows_export(eff_type):
+            continue
+
+        if should_skip or not rel_path:
             continue
         
         # Optimization: Collect property accessors during this same loop
@@ -634,6 +644,16 @@ def create_new_object(rel_path, file_path, import_managers, name_map,
             log_error("Could not find parent POU '" + parent_name + "' for child '" +
                       child_name + "' (" + rel_path + "). Skipping to avoid invalid dotted-name object.")
             return None
+
+    # Direction re-check now that the kind is known from the file content
+    # (new .st items reach perform_import_items without a type_guid).
+    created_kind = kind_of(type_guid or "")
+    if created_kind and not kind_allows_import(created_kind):
+        msg = ("Skipping creation of '%s' (%s): sync_direction=%s"
+               % (rel_path, created_kind, sync_direction_of(created_kind)))
+        print("  [!] " + msg)
+        log_warning(msg)
+        return None
 
     manager = resolve_manager(import_managers, type_guid, rel_path)
     res = manager.create(container, name, file_path, type_guid)
@@ -1124,6 +1144,19 @@ def perform_import_items(primary_project, base_dir, to_sync, globals_ref=None):
     # ═══════════════════════════════════════════════════════════════════
     for item in to_sync:
         try:
+            # Per-kind sync direction (profiles/default.json): never import,
+            # overwrite or DELETE kinds the profile marks export_only/disabled
+            # (e.g. the Library Manager) — their disk file is a projection for
+            # Git visibility, not a source of truth.
+            item_kind = kind_of(item.get("type_guid") or "")
+            if item_kind and not kind_allows_import(item_kind):
+                msg = ("Skipping import of '%s' (%s): sync_direction=%s"
+                       % (item.get("name"), item_kind,
+                          sync_direction_of(item_kind)))
+                print("  [!] " + msg)
+                log_warning(msg)
+                continue
+
             # Handle Deletions (Orphans)
             if item.get("is_orphan"):
                 obj = item.get("obj")

@@ -228,8 +228,15 @@ def perform_export(base_dir, selected, unchanged_count=0):
         
         # Scenario 2: Object exists in IDE -> EXPORT to disk
         from codesys_managers import classify_object
+        from codesys_constants import kind_allows_export, sync_direction_of
         effective_type, is_xml, should_skip = classify_object(obj)
         if should_skip: continue
+
+        # Per-kind sync direction (profiles/default.json)
+        if not kind_allows_export(effective_type):
+            log_info("Skipping export of %s (sync_direction=%s)"
+                     % (item.get("path"), sync_direction_of(effective_type)))
+            continue
 
         # --- PROPERTY ACCESSOR COLLECTION ---
         if effective_type == TYPE_GUIDS["property"]:

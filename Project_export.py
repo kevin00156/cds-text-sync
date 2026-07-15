@@ -27,7 +27,7 @@ _load_hidden_module("codesys_ui")
 
 from codesys_constants import (
     IMPL_MARKER, TYPE_GUIDS, EXPORTABLE_TYPES, XML_TYPES, FORBIDDEN_CHARS, RESERVED_FILES,
-    SCRIPT_VERSION
+    SCRIPT_VERSION, kind_allows_export, sync_direction_of
 )
 from codesys_utils import (
     safe_str, clean_filename, load_base_dir,
@@ -324,6 +324,12 @@ def export_project(export_dir, projects_obj=None):
             # ----------------------------------------
 
             if should_skip:
+                continue
+
+            # Per-kind sync direction (profiles/default.json)
+            if not kind_allows_export(effective_type):
+                log_info("Skipping export of %s (sync_direction=%s)"
+                         % (rel_path, sync_direction_of(effective_type)))
                 continue
 
             # XML gate: skip non-always-exported XML types when export_xml is off

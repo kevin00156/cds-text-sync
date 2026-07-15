@@ -32,15 +32,12 @@ _load_hidden_module("codesys_utils")
 _load_hidden_module("codesys_managers")
 
 # Import shared constants and utilities
-from codesys_constants import TYPE_GUIDS
+from codesys_constants import TYPE_GUIDS, TYPE_NAMES
 from codesys_utils import (
     safe_str, load_base_dir, init_logging, log_info, log_warning, log_error,
     resolve_projects
 )
 from codesys_managers import is_nvl
-
-# Reverse mapping of TYPE_GUIDS for logging human-readable type names
-TYPE_NAMES = {v: k for k, v in TYPE_GUIDS.items()}
 
 def discover_project():
     """Discover and log all project objects as a tree."""
@@ -144,12 +141,14 @@ def discover_project():
         # Summary of unknown types
         if unknown_types:
             print("\n!!! UNKNOWN OBJECT TYPES FOUND !!!")
-            print("These GUIDs are missing from codesys_constants.py:")
+            print("These GUIDs are missing from profiles/default.json:")
             for guid, name in unknown_types.items():
                 line = " - %s (Example: %s)" % (guid, name)
                 print(line)
                 log_warning("Unknown object type found: " + line)
-            print("Please add them to TYPE_GUIDS in codesys_constants.py\n")
+            print("Add each GUID to 'guid_aliases' in profiles/default.json --")
+            print("append it to an existing kind's list if it is a variant of a")
+            print("known type (no code change needed), then re-run discovery.\n")
 
         print("\n=== Discovery Complete (" + str(len(tree_lines)) + " nodes). Tree stored in sync_debug.log ===")
 

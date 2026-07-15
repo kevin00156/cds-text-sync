@@ -1291,18 +1291,29 @@ def build_folder_hashes(object_hashes):
 
 
 def load_sync_cache(base_dir):
-    """Load the synchronization cache from sync_cache.json in the base directory."""
+    """Load the synchronization cache from sync_cache.json in the base directory.
+
+    The cache stores object classifications, so it is only trusted when it was
+    built with the same type profile: a profile edit (new GUID alias, changed
+    sync direction) changes PROFILE_HASH and forces a full re-classification.
+    """
+    from codesys_constants import PROFILE_HASH
     cache_path = os.path.join(base_dir, "sync_cache.json")
     if os.path.exists(cache_path):
         try:
             with codecs.open(cache_path, "r", "utf-8") as f:
                 data = json.load(f)
-                return {
-                    "objects": data.get("objects", {}),
-                    "folders": data.get("folders", {}),
-                    "types": data.get("types", {}),
-                    "version": data.get("version", "1.0")
-                }
+                if data.get("profile_hash") != PROFILE_HASH:
+                    log_info("Sync cache discarded: type profile changed "
+                             "(cache=%s, current=%s) - full re-classification."
+                             % (data.get("profile_hash"), PROFILE_HASH))
+                else:
+                    return {
+                        "objects": data.get("objects", {}),
+                        "folders": data.get("folders", {}),
+                        "types": data.get("types", {}),
+                        "version": data.get("version", "1.0")
+                    }
         except Exception as e:
             log_warning("Could not load sync cache: " + safe_str(e))
     return {"objects": {}, "folders": {}, "types": {}, "version": "2.0"}
@@ -1310,9 +1321,11 @@ def load_sync_cache(base_dir):
 
 def save_sync_cache(base_dir, objects_cache, folder_hashes=None, type_cache=None):
     """Save the synchronization cache to sync_cache.json in the base directory."""
+    from codesys_constants import PROFILE_HASH
     cache_path = os.path.join(base_dir, "sync_cache.json")
     cache_data = {
         "version": "2.0",
+        "profile_hash": PROFILE_HASH,
         "created": time.strftime("%Y-%m-%dT%H:%M:%S"),
         "folders": folder_hashes or {},
         "types": type_cache or {},
