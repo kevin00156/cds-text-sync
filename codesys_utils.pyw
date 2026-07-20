@@ -1353,9 +1353,10 @@ def find_object_by_path(rel_path, project):
         last_part = parts[-1]
         if "." in last_part:
             name_part, doc_type = last_part.rsplit(".", 1)
-            # Verify if doc_type is a known CODESYS type name
-            from codesys_constants import TYPE_NAMES
-            if doc_type in TYPE_NAMES.values() or doc_type == "pou_xml":
+            # Verify if doc_type is a known CODESYS type name. Retired kind
+            # names count too - old exports on disk still carry them.
+            from codesys_constants import KNOWN_TYPE_SUFFIXES
+            if doc_type in KNOWN_TYPE_SUFFIXES:
                 parts[-1] = name_part
 
     current_obj = project

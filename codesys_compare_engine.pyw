@@ -20,7 +20,7 @@ import tempfile
 import time
 from codesys_constants import (
     TYPE_GUIDS, EXPORTABLE_TYPES, XML_TYPES, IMPLEMENTATION_TYPES,
-    RESERVED_FILES, TYPE_NAMES, kind_of, sync_direction_of,
+    RESERVED_FILES, TYPE_NAMES, KNOWN_TYPE_SUFFIXES, kind_of, sync_direction_of,
     kind_allows_export, kind_allows_import
 )
 from codesys_utils import (
@@ -233,10 +233,15 @@ def find_all_changes(base_dir, projects_obj, export_xml=False):
             should_skip = False
             fresh_path = build_expected_path(obj, eff_type, is_xml)
             if fresh_path and fresh_path != cached_rel_path:
-                # Path changed in IDE — invalidate cached path
-                rel_path = fresh_path
+                # Path disagrees with the cache: the object moved/renamed in the
+                # IDE, or the cached classification predates the current profile.
+                # Re-classify rather than keeping a stale (eff_type, is_xml) —
+                # those decide .st vs .xml, so half-trusting them yields a path
+                # that neither export nor import agrees on.
+                eff_type, is_xml, should_skip = classify_object(obj)
+                rel_path = build_expected_path(obj, eff_type, is_xml) if not should_skip else None
                 path_invalidations += 1
-                log_info("Path invalidated for GUID %s: '%s' -> '%s'" % (obj_guid, cached_rel_path, fresh_path))
+                log_info("Path invalidated for GUID %s: '%s' -> '%s'" % (obj_guid, cached_rel_path, rel_path))
             else:
                 rel_path = cached_rel_path
                 path_cache_hits += 1
@@ -537,10 +542,9 @@ def scan_new_disk_files(base_dir, ide_paths):
                 name = os.path.splitext(f)[0]
                 if f.endswith(".xml") and "." in name:
                     name_part, doc_type = name.rsplit(".", 1)
-                    from codesys_constants import TYPE_NAMES
-                    if doc_type in TYPE_NAMES.values() or doc_type == "pou_xml":
+                    if doc_type in KNOWN_TYPE_SUFFIXES:
                         name = name_part
-                        
+
                 new_files.append({
                     "name": name,
                     "path": rel_path,
@@ -630,7 +634,9 @@ def create_new_object(rel_path, file_path, import_managers, name_map,
     type_guid = determine_object_type(content_check)
     kind_pragma = pragmas.get("kind")
     if kind_pragma:
-        pragma_guid = TYPE_GUIDS.get(kind_pragma)
+        # kind_of() also resolves retired kind names, so a pragma written by an
+        # older version still maps onto the current profile's primary GUID.
+        pragma_guid = TYPE_GUIDS.get(kind_of(kind_pragma))
         if not pragma_guid:
             log_error("Unknown kind '%s' in pragma of %s - add it to "
                       "guid_aliases in profiles/default.json. Skipping creation."

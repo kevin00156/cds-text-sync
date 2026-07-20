@@ -130,6 +130,47 @@ class TestGoldenEquivalence:
         assert set(constants.IMPLEMENTATION_TYPES) == old
 
 
+class TestLegacyKindNames:
+    """Retired kind names stay parseable in export filenames and kind pragmas.
+
+    Regression: collapsing 'method_alt' into an alias of 'method' dropped it
+    from TYPE_NAMES.values(), which was what filename parsing keyed on. Old
+    exports named '<Name>.method_alt.xml' were then read with the suffix still
+    glued to the object name ("Init.method_alt"), so every IDE lookup for them
+    failed and import reported "could not find Init.method_alt after import".
+    """
+
+    def test_retired_names_are_accepted_suffixes(self, constants):
+        assert "method_alt" in constants.KNOWN_TYPE_SUFFIXES
+        assert "enum" in constants.KNOWN_TYPE_SUFFIXES
+
+    def test_current_kinds_and_pou_xml_are_accepted_suffixes(self, constants):
+        for kind in constants.KIND_GUIDS:
+            assert kind in constants.KNOWN_TYPE_SUFFIXES
+        assert "pou_xml" in constants.KNOWN_TYPE_SUFFIXES
+
+    def test_unknown_suffix_is_rejected(self, constants):
+        # Guards against a blanket "anything after the last dot is a type"
+        # rule, which would truncate legitimate dotted object names.
+        assert "SomeChild" not in constants.KNOWN_TYPE_SUFFIXES
+
+    def test_every_retired_name_resolves_to_a_live_kind(self, constants):
+        for old_name, kind in constants.LEGACY_KIND_NAMES.items():
+            assert constants.kind_of(old_name) == kind
+            assert kind in constants.KIND_GUIDS
+
+    def test_retired_names_are_not_live_kinds(self, constants):
+        for old_name in constants.LEGACY_KIND_NAMES:
+            assert old_name not in constants.KIND_GUIDS
+            assert old_name not in constants.TYPE_NAMES.values()
+
+    def test_kind_pragma_with_retired_name_maps_to_primary_guid(self, constants):
+        # A .st file written by an older version may carry
+        # '//% cds-text-sync.kind=method_alt'; it must still create a method.
+        assert constants.TYPE_GUIDS[constants.kind_of("method_alt")] == \
+            _OLD_TYPE_GUIDS["method"]
+
+
 class TestAliasResolution:
     def test_both_method_guids_resolve_to_method(self, constants):
         assert constants.kind_of(_OLD_TYPE_GUIDS["method"]) == "method"

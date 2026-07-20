@@ -250,8 +250,24 @@ def export_project(export_dir, projects_obj=None):
                 # versions, so always re-classify skipped objects. Otherwise a
                 # once-skipped object stays buried forever even after its type
                 # becomes exportable.
-                effective_type, is_xml, rel_path = cached_type[0], cached_type[1], cached_rel_path
+                effective_type, is_xml = cached_type[0], cached_type[1]
                 should_skip = False
+                # Validate the cached path against the live tree, exactly like
+                # compare does. Without this, an object stays pinned to whatever
+                # path an older version computed (e.g. the retired
+                # '<Parent>/<Name>.<kind>.xml' layout) and export keeps writing
+                # there forever while compare/import expect the current layout.
+                fresh_path = build_expected_path(obj, effective_type, is_xml)
+                if fresh_path and fresh_path != cached_rel_path:
+                    # The path disagrees: the object moved/renamed in the IDE, or
+                    # the cached classification predates the current profile.
+                    # Re-classify instead of trusting either stale half.
+                    log_info("Path invalidated for GUID %s: '%s' -> re-classifying"
+                             % (obj_guid, cached_rel_path))
+                    effective_type, is_xml, should_skip = classify_object(obj)
+                    rel_path = build_expected_path(obj, effective_type, is_xml) if not should_skip else None
+                else:
+                    rel_path = cached_rel_path
             else:
                 effective_type, is_xml, should_skip = classify_object(obj)
                 rel_path = build_expected_path(obj, effective_type, is_xml) if not should_skip else None

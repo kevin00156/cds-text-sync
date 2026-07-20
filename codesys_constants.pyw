@@ -59,6 +59,21 @@ def _load_profile():
                 "Type profile %s: guid_aliases['%s'] must be a non-empty "
                 "list of GUID strings" % (path, kind))
 
+    legacy = data.get("legacy_kind_names", {})
+    if not isinstance(legacy, dict):
+        raise ValueError(
+            "Type profile %s: 'legacy_kind_names' must be an object" % path)
+    for old_name, kind in legacy.items():
+        if old_name in aliases:
+            raise ValueError(
+                "Type profile %s: legacy_kind_names['%s'] is still a live kind "
+                "in guid_aliases - a name is either current or retired, not both"
+                % (path, old_name))
+        if kind not in aliases:
+            raise ValueError(
+                "Type profile %s: legacy_kind_names['%s'] points at unknown "
+                "kind '%s'" % (path, old_name, kind))
+
     direction = data.get("sync_direction", {})
     if not isinstance(direction, dict):
         raise ValueError(
@@ -105,11 +120,27 @@ TYPE_NAMES = dict(GUID_TO_KIND)
 SYNC_DIRECTION = dict((str(_k), str(_v))
                       for _k, _v in _PROFILE.get("sync_direction", {}).items())
 
+# retired kind name -> current kind. Earlier versions treated these as kinds of
+# their own and baked them into exported filenames; they are GUID aliases now.
+LEGACY_KIND_NAMES = dict((str(_k), str(_v))
+                         for _k, _v in _PROFILE.get("legacy_kind_names", {}).items())
+
+# Every token that may legitimately appear as the <kind> segment of a
+# "<Name>.<kind>.xml" export filename: current kinds, retired kind names, and
+# the graphical-POU marker. Filename parsing MUST accept the retired ones too -
+# otherwise an old export on disk is read with the suffix still glued to the
+# object name ("Init.method_alt"), and every lookup for it fails.
+KNOWN_TYPE_SUFFIXES = frozenset(
+    list(KIND_GUIDS.keys()) + list(LEGACY_KIND_NAMES.keys()) + ["pou_xml"])
+
 
 def kind_of(guid_or_kind):
-    """Resolve a GUID (any alias) or a kind name to the kind name, else None."""
+    """Resolve a GUID (any alias), a kind name, or a retired kind name to the
+    current kind name, else None."""
     if guid_or_kind in KIND_GUIDS:
         return guid_or_kind
+    if guid_or_kind in LEGACY_KIND_NAMES:
+        return LEGACY_KIND_NAMES[guid_or_kind]
     return GUID_TO_KIND.get(str(guid_or_kind).lower())
 
 

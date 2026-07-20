@@ -62,7 +62,12 @@
     "task_local_gvl": ["c2cda7a9-0ba4-4146-b563-22a42fa0eb72"],
     "project_settings": ["8753fe6f-4a22-4320-8103-e553c4fc8e04"]
   },
+  "legacy_kind_names": {
+    "method_alt": "method",
+    "enum": "dut"
+  },
   "alias_notes": {
+    "legacy_kind_names": "Kind names earlier versions used as their own kinds and baked into exported filenames ('<Name>.<kind>.xml'). They are GUID aliases now, so they no longer appear in TYPE_NAMES - but old exports on disk still carry the old suffix and must stay parseable. Never delete an entry here; add one whenever a kind is collapsed into an alias.",
     "dut[1]": "Enumeration DUT variant seen on SP21 P4 (was 'enum'); textual, decl-only like a dut",
     "method[1]": "Alternate Method GUID seen on SP21 P4, e.g. BaseStateMachine.Main/Init (was 'method_alt')",
     "persistent_gvl[0]": "Verified via Project_discover on SP21 P4 (k1.0.1 fix)",
