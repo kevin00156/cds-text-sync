@@ -196,6 +196,7 @@ Exports the current project state to the sync folder.
 
 Updates the CODESYS project from the files on disk.
 
+- **Login Pre-flight**: Refuses to run while the project is logged into a PLC and names the online application(s). CODESYS blocks every create/move/delete on a device you are logged into, so the import would otherwise fail object by object — log out (`Ctrl + F8`) and run it again.
 - **Smart Update**: Updates existing objects, creates new ones, and builds folder hierarchies.
 - **Deletions**: If a file was deleted from disk (e.g. via git pull), the script will now safely remove the corresponding object from the CODESYS project, ensuring your IDE matches your repository.
 - **Safety Backup**: If enabled, creates a timestamped project backup (`YYYYMMDD_HHMMSS_ProjectName.project.bak`) before modifying any code in the `.project/` folder.

@@ -30,6 +30,7 @@ for _mod_name in list(sys.modules.keys()):
 _load_hidden_module("codesys_constants")
 _load_hidden_module("codesys_utils")
 _load_hidden_module("codesys_managers")
+_load_hidden_module("codesys_online")
 _load_hidden_module("codesys_compare_engine")
 _load_hidden_module("codesys_ui")
 
@@ -44,6 +45,7 @@ from codesys_utils import (
 from codesys_compare_engine import (
     find_all_changes, perform_import_items, build_device_remap, summarize_device_remap
 )
+from codesys_online import find_logged_in_applications, logged_in_block_message
 
 
 
@@ -79,6 +81,16 @@ def import_project(projects_obj=None):
             print("Import cancelled due to version mismatch.")
             return
     
+    # A live PLC login makes every create/move/delete fail inside the IDE, so
+    # check before spending a full compare on an import that cannot land.
+    online_apps = find_logged_in_applications(projects_obj.primary, globals())
+    if online_apps:
+        block = logged_in_block_message(online_apps)
+        print(block)
+        log_warning("Import blocked - logged into: " + ", ".join(online_apps))
+        system.ui.error(block)
+        return
+
     print("=== Starting Project Import ===")
     print("Importing from: " + base_dir)
     start_time = time.time()

@@ -34,6 +34,7 @@ for _mod_name in list(sys.modules.keys()):
 _load_hidden_module("codesys_constants")
 _load_hidden_module("codesys_utils")
 _load_hidden_module("codesys_managers")
+_load_hidden_module("codesys_online")
 _load_hidden_module("codesys_ui_diff")
 _load_hidden_module("codesys_ui")
 _load_hidden_module("codesys_compare_engine")
@@ -55,6 +56,7 @@ from codesys_compare_engine import (
     find_all_changes, perform_import_items, create_import_managers,
     TYPE_NAMES, build_expected_path
 )
+from codesys_online import find_logged_in_applications, logged_in_block_message
 
 
 
@@ -162,7 +164,16 @@ def perform_import(primary_project, base_dir, selected, unchanged_count=0):
     if not selected:
         system.ui.info("No files selected for import.")
         return
-    
+
+    # A live PLC login makes every create/move/delete fail inside the IDE.
+    online_apps = find_logged_in_applications(primary_project, globals())
+    if online_apps:
+        block = logged_in_block_message(online_apps)
+        print(block)
+        log_warning("Import blocked - logged into: " + ", ".join(online_apps))
+        system.ui.error(block)
+        return
+
     # Create timestamped safety backup if enabled
     projects_obj = resolve_projects(None, globals())
     backup_filename = create_safety_backup(base_dir, projects_obj, selected)
