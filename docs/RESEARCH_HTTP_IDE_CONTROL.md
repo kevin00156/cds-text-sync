@@ -159,6 +159,8 @@
 
 限制：這四組都是用 `--runscript` 在啟動時執行腳本。從 Tools 選單啟動腳本的路徑我沒有量測到，因為 UI 自動化在 CODESYS 的 WinForms 選單上失敗，而且第二個 3.5.21.40 實例一開就跳出「有未儲存的專案資料可以復原」的對話框（指向使用者正開著的專案），我沒有回答它就把測試實例關掉了。兩種啟動方式的腳本都跑在 UI 執行緒上，經過同一個 ScriptEngine 執行器，我預期行為相同，但這是推測。手動驗證用的腳本放在 [`tools/probe_ui_responsive.py`](../tools/probe_ui_responsive.py)：從 Tools > Scripting > Execute Script File 執行它，45 秒內試著點選單和捲動編輯器。
 
+**2026-09-05 更正。** 上表的「可操作」是錯的。那一輪的儀器只量了 Windows 的凍結判定、送達型訊息與投遞型的最小化訊息，三者都不是使用者輸入。隔天改用真實滑鼠每 5 秒點一次 File 選單並數下拉視窗：腳本開始前開得出來，`system.delay(50)` 迴圈期間每一次都開不出來，選單路徑與 `--runscript` 路徑皆然。也就是 `system.delay()` 只抽送非輸入的訊息，滑鼠鍵盤被過濾。使用者實際體驗就是「視窗活著但點不動」。可行的替代方案是讓腳本立刻返回、把工作掛在 WinForms `Timer` 上，實測返回後 `projects` 與 `system` 仍有效，連使用者再跑別的腳本之後也還有效（SP21 與 Delta 1.10 都驗過）。細節見 [`WATCHER_CLI_PLAN.md`](WATCHER_CLI_PLAN.md) 第 14 節。
+
 ### 3.3 無頭（headless）第二實例的限制
 
 `--noUI --runscript` 的官方行為是「腳本跑完就結束」（[文件](https://content.helpme-codesys.com/en/CODESYS%20Scripting/_cds_starting_script_via_command_line.html)）。要讓它常駐，腳本自己不返回就行，Forge 上「CODESYS 可以無頭啟動並執行 Python 腳本」也是官方 Scripting 專案的說法（[Forge Scripting 首頁](https://forge.codesys.com/tol/scripting/home/Home/)）。限制：

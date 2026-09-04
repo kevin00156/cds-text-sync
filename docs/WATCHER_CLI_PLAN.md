@@ -33,7 +33,7 @@
 |---|---|---|
 | 命令通道 | 檔案目錄 | 社群專案已驗證；IronPython 端零網路程式碼；多 IDE 時一實例一目錄最直觀 |
 | 先做什麼 | 只做 CLI | MCP 之後包在 CLI 外面，不影響 IDE 端設計 |
-| 等待方式 | `system.delay(50)` | 官方文件寫「等待期間會服務訊息迴圈」；本機在 CODESYS 3.5.21.40 與 Delta DIADesigner-AX 1.10 實測 IDE 全程可操作；`time.sleep()` 在 Delta 上會凍結 45 秒 |
+| 等待方式 | **計時器，腳本立刻返回**（2026-09-05 改，見第 14 節） | 原本選 `system.delay(50)`，但實測它只抽送重繪與投遞型訊息，**不處理滑鼠鍵盤**，使用者看到的就是「視窗活著但點不動」。改成 WinForms `Timer` 掛在 IDE 自己的訊息迴圈上，腳本返回後 IDE 完全可用；API 物件在返回後仍有效，SP21 與 Delta 1.10 都驗過 |
 | 執行緒 | 全部在主執行緒 | 物件模型只能在主執行緒呼叫；SP21 的 ScriptEngine 4.2.0.0 已拿掉 `execute_on_primary_thread` |
 | 分支 | `feat/ide-watcher-cli`，worktree 在 `..\kevin-cds-text-sync-watcher` | 原本的 checkout 停在 `fix/member-creation-parent-resolution`，有未提交的 readMe.md 修改，不要碰 |
 
@@ -192,7 +192,10 @@ instances\
 
 ## 6. 看門人規格（`cds/ide/watcher.py` 與 `Project_watch.py`）
 
-主迴圈：
+> **2026-09-05：本節的「主迴圈 + `system.delay()`」設計作廢，改成第 14 節的計時器設計。**
+> silent 模式的作法、實作時發現的四件事、薄入口的規則都還有效，只有「怎麼等」變了。
+
+原本的主迴圈（已作廢）：
 
 ```python
 while running:
@@ -320,6 +323,13 @@ python cli/cds_ide.py stop    [--target X]
   - [x] 驗收（2026-09-04 無頭自動跑完）：CODESYS 3.5.21.40 開 `cds-alpha`、Delta 1.10 開 `cds-beta`，
         兩個各 60 個 POU，同時各跑一次 `export`，兩邊都成功、各自寫進自己的同步資料夾、各 60 個 `.st`，
         期間另一個行程連續跑了 401 次 `list` 去撞登記檔，兩支看門人都活著。
+- [ ] **階段 4：改成計時器設計（2026-09-05，見第 14 節）**
+  - [ ] `cds/ide/watcher.py`：主迴圈換成 `Timer.Tick` 處理器；`main()` 掛好計時器就返回；狀態放在 `sys` 的屬性上；重入保護；tick 內接住所有例外。
+  - [ ] `Project_watch.py`：再跑一次等於 stop（切換式），跟 CLI `stop` 一樣的收尾。
+  - [ ] `tests/test_watcher.py` 改成驅動 tick，涵蓋：重入時第二個 tick 直接返回、tick 內例外不會外洩、stop 後計時器停掉且登記檔消失。
+  - [ ] `tools/probe_watcher_ui.py`：給 `--runscript` 用的驗收啟動器，建一個臨時專案並設好 `cds-sync-folder`，然後走跟 `Project_watch.py` 一樣的啟動路徑並返回。監督者會用它做真實點擊的自動驗收。
+  - [ ] 驗收（監督者自動跑）：看門人跑著時，每 5 秒對 File 選單做一次真實滑鼠點擊都能開出下拉；期間 `ping`、`export`、`stop` 都成功；stop 後登記檔消失、選單仍可點。
+  - [ ] 驗收（無頭）：既有的階段 1 到 3 無頭驗收重跑一次，全部照舊通過。
 
 ---
 
@@ -421,3 +431,68 @@ IronPython 那邊可以透過 .NET 的 `FileShare.Delete`，但 CLI 是 CPython�
 現在先回我一句你讀完後對階段 0 的理解，包含你打算把協定模組放哪裡、測試要蓋哪些情況，
 然後開始。
 ```
+
+
+---
+
+## 14. 2026-09-05 修正：`system.delay()` 不處理使用者輸入，改成計時器設計
+
+### 14.1 使用者回報
+
+從 Tools 選單啟動 `Project_watch.py` 之後，功能正常，但 IDE 主視窗點不動；按進度顯示上的 Cancel 腳本就停。跟 1.6.x 那支 daemon 沒有實質差別。
+
+### 14.2 根因（已用真實輸入實測）
+
+前一天的實測儀器只量了三件事：Windows 有沒有判定視窗凍結、送達型訊息有沒有回應、投遞的「最小化」訊息有沒有被處理。三個都過，所以下了「可操作」的結論。這個結論是錯的，因為那三個訊號都不是使用者輸入。
+
+2026-09-05 換成真的滑鼠：每 5 秒把 IDE 拉到前景，對選單列最左邊的 File 點一下，看有沒有長出下拉視窗（WinForms 的下拉是一個獨立的頂層視窗，用 `EnumWindows` 數得到）。結果：
+
+| 情境 | 腳本開始前 | `system.delay(50)` 迴圈期間 |
+|---|---|---|
+| 選單路徑（用計時器在沒有腳本脈絡時呼叫「Execute Script File...」命令，跟點選單同一條路） | 下拉會開 | **每次都開不出來** |
+| 啟動參數路徑（`--runscript`） | 未量到基準 | **每次都開不出來** |
+
+也就是說，`system.delay()` 抽送的是重繪、計時器、送達型與投遞型的非輸入訊息，滑鼠鍵盤被過濾掉。這解釋了為什麼看門人回得了 CLI（訊息迴圈在轉）、視窗不會變成「沒有回應」、但人就是點不動。兩條啟動路徑都一樣，所以「改用 `--runscript` 啟動」也不是解法。這跟 2012 年官方講的「主執行緒是腳本的」一致：只要腳本還在跑，UI 就不是使用者的。
+
+只在 CODESYS 3.5.21.40 上做了真實點擊測試；Delta 1.10 沒有量輸入，但機制相同，不另外假設它會不一樣。
+
+### 14.3 解法：讓腳本結束，把工作掛在 IDE 自己的訊息迴圈上
+
+`Project_watch.py` 啟動時建立一個 WinForms `Timer`（間隔 200 到 500 毫秒），把 tick 處理器掛上去，然後**立刻返回**。腳本結束後進度顯示消失、IDE 完全回到使用者手上；每次 tick 在 IDE 自己的訊息迴圈上跑，做的事跟原本主迴圈一輪一樣：撿命令、執行、寫結果、心跳。
+
+這條路的前提是「腳本返回後 CODESYS 的 API 物件還能用」。2012 年官方警告過返回後暫存狀態會被清掉，所以實測了兩輪，SP21（ScriptEngine 4.2.0.0）與 Delta 1.10（4.0.0.0）都過：
+
+| 檢查 | 返回後 | 使用者又從選單跑了另一支腳本之後 |
+|---|---|---|
+| 抓在手上的 `projects.primary.path` | OK | OK |
+| 抓在手上的 `primary.get_children()` | OK | OK |
+| 抓在手上的 `system.write_message` | OK | OK |
+| 抓在手上的 `system.delay(10)` | OK | OK |
+| `__main__.projects` 仍是同一個物件 | 是 | 是 |
+
+另外實測到一件事：腳本返回後前 10 到 15 秒 IDE 可能還在忙（例如剛建完專案在載入程式庫），計時器要等它閒下來才會開始 tick。這不是問題，只是別把「第一個 tick 沒馬上來」當成故障。
+
+### 14.4 設計規則
+
+- **狀態放在 `sys` 的屬性上**（例如 `sys._cds_watcher`），不要放在腳本模組的全域。1.6.x 的 daemon 就是這樣做的，原因是腳本結束後模組命名空間不保證還在，而 `sys` 一定在。計時器物件也要放在裡面，免得被回收。
+- **重入保護。** 匯入、編譯這種命令會抽送訊息（對話框、`system.delay`、進度），抽送期間計時器會再 tick。tick 一進來先看 busy 旗標，busy 就直接返回。
+- **tick 內接住一切。** WinForms 的 tick 處理器丟出沒接住的例外，會直接變成 IDE 的執行緒例外對話框，可能把 IDE 帶下去。tick 要用 `except BaseException` 接住（`SystemExit` 除外），寫進結果檔或 log，然後繼續。`NeedsInput` 是 `BaseException` 的子類，在命令層就已經接住，不會漏到這裡。
+- **停止方式有兩種**：CLI `stop`，以及再跑一次 `Project_watch.py`（切換式，跟 1.6.x 一樣）。兩種都走同一個收尾：停計時器、刪登記檔與目錄、清 `sys` 上的狀態。原本的「按 Cancel 停止」沒有了，因為腳本已經不在跑；`system.abortable` 那行拿掉。
+- **心跳照舊在 tick 裡做。** 命令執行中發不出心跳，登記檔的 `busy` 狀態已經處理這件事（第 5.2 節）。
+- **不開執行緒、不 `time.sleep()`、不 `execute_on_primary_thread`** 這三條不變。tick 本身就在 UI 執行緒上，不需要任何跨執行緒的東西。
+- **同一個 IDE 只准一支**：啟動時檢查 `sys` 上有沒有活著的狀態；有就當作「再跑一次 = stop」。
+
+### 14.5 驗收怎麼做
+
+監督者手上有一套會做真實點擊的儀器（PowerShell，`SetForegroundWindow` 加 `mouse_event` 點 File 選單，數下拉視窗）。流程：
+
+1. 用 `--runscript` 啟動 CODESYS 3.5.21.40，跑 `tools/probe_watcher_ui.py`：它建臨時專案、設 `cds-sync-folder`、走 `Project_watch.py` 的啟動路徑、返回。
+2. 儀器每 5 秒點一次 File 選單，要求每次都開得出下拉。
+3. 期間從外面跑 `cds_ide.py ping`、`export`、`stop`，三個都要成功；`export` 期間那幾秒點不開是正常的，之後要恢復。
+4. `stop` 之後登記檔消失，選單仍可點。
+
+前一天的「已驗收」項目裡凡是寫「IDE 可操作」的，都要以這一輪為準重新驗。
+
+### 14.6 對研究筆記的影響
+
+`RESEARCH_HTTP_IDE_CONTROL.md` 第 3.2.1 節的結論「可操作」已加註更正。社群專案 Codesys-MCP-SP21-plus 宣稱 `system.delay()` 讓 UI 可互動，這個說法以本機實測來看不成立。
