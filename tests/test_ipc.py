@@ -51,6 +51,19 @@ def test_write_json_overwrites_an_existing_file(tmp_path):
     assert ipc.read_json(path) == {"beat": 2}
 
 
+def test_a_rename_that_cannot_happen_leaves_no_tmp_behind(tmp_path,
+                                                          monkeypatch):
+    # On Windows the rename fails while another process has the file open for
+    # reading, which is exactly what the CLI does to registrations.
+    def locked(src, dst):
+        raise OSError(13, "used by another process")
+    monkeypatch.setattr(ipc, "_replace", locked)
+    path = str(tmp_path / "reg.json")
+    with pytest.raises(EnvironmentError):
+        ipc.write_json(path, {"beat": 1})
+    assert not os.path.exists(path + ".tmp")
+
+
 def test_write_json_keeps_non_ascii_readable(tmp_path):
     path = str(tmp_path / "msg.json")
     ipc.write_json(path, {"text": u"匯入完成"})

@@ -242,7 +242,11 @@ Updates the CODESYS project from the files on disk.
 - **Multi-App Support**: Detects multiple applications and allows you to select which one to compile.
 - **Visual Feedback**: Shows a final summary including error/warning counts and compilation duration.
 
-### 9. `Project_perf_test.py` (Benchmarking)
+### 9. `Project_watch.py` (Command Watcher)
+
+**Leave it running and drive this IDE from a terminal.** It listens for commands from `cli/cds_ide.py` and runs export, import, compare or build for you, without you closing the project. See [Driving the IDE from a terminal](#-driving-the-ide-from-a-terminal) below.
+
+### 10. `Project_perf_test.py` (Benchmarking)
 
 **Performance profiling tool.** Measures exact execution times for object discovery, comparison, and hashing.
 
@@ -277,6 +281,55 @@ python tools/call_tree.py <sync-dir> MAIN -o call_tree.json
 ```
 
 It resolves project functions/FB method calls across files (including FB instances declared in GVLs), tags IEC system calls via `tools/sys_funcs.json`, and marks anything unresolved.
+
+---
+
+## 🎛️ Driving the IDE from a terminal
+
+Open your project, run `Project_watch.py` from **Tools > Scripting**, and leave it running. It sits in the IDE waiting for commands. From any terminal:
+
+```powershell
+python cli/cds_ide.py list                  # which IDEs are listening
+python cli/cds_ide.py export                # write the project out to the sync folder
+python cli/cds_ide.py import --yes          # read the sync folder back in
+python cli/cds_ide.py compare               # report the differences, change nothing
+python cli/cds_ide.py build --app MyApp     # build and report the error count
+python cli/cds_ide.py stop                  # shut the watcher down
+```
+
+### What "the IDE stays usable" does and does not mean
+
+**Waiting does not block the IDE.** Between commands the watcher parks in `system.delay()`, which keeps serving the IDE's message loop, so menus, editors and scrolling all work as usual.
+
+**Running a command does block it.** While an export or import is actually running, the IDE is busy for those few seconds, exactly as it is when you run the script from the menu yourself. That is a property of the CODESYS object model — every call has to happen on the UI thread — and no design on this side can change it. Expect the IDE to freeze for the length of the command and come back afterwards.
+
+### Answering the questions the scripts would have asked
+
+The scripts normally ask before doing anything destructive. With nobody at the keyboard, those questions are answered by flags instead, and a question with no flag behind it is **not** guessed:
+
+| Flag | Answers |
+|---|---|
+| `--yes` | "Ready to import N changes. Proceed?" — required for `import` |
+| `--force` | version-mismatch and computer-mismatch warnings; default is to stop |
+| `--delete-orphans` | "Delete orphaned files?" during export; default is to keep them |
+| `--app NAME` | which application to build, when the project has several |
+
+Leave one out and the command comes back with exit code 1 and a `needs_input` field naming the flag that would have answered it. Nothing is changed in the IDE, and no dialog is left waiting on screen.
+
+`compare` never opens its interactive picker here. It reports the counts and prints the per-object differences, and changes nothing either way.
+
+### Several IDEs at once
+
+Each IDE running the watcher gets its own directory under `%LOCALAPPDATA%\cds-text-sync\instances`, so their commands never mix and two IDEs can be working at the same time. `list` shows them all; pick one with `--target`, giving either the instance id or the project name. With exactly one IDE listening you can leave `--target` out.
+
+### Exit codes
+
+| Code | Meaning |
+|---|---|
+| 0 | done |
+| 1 | the command failed, or it needs a flag you did not give |
+| 2 | no single listening IDE matched — none found, or several |
+| 3 | timed out waiting for the answer (`--timeout`, 120 seconds by default) |
 
 ---
 

@@ -79,7 +79,13 @@ def ensure_dirs(root, instance_id):
 # --------------------------------------------------------------------------
 
 def write_json(path, data):
-    """Write data to path atomically, via <path>.tmp plus a rename."""
+    """Write data to path atomically, via <path>.tmp plus a rename.
+
+    The rename can fail: on Windows a file another process has open cannot be
+    replaced, and the reader on the other side of this protocol opens these
+    files constantly. That raises, and the caller decides — the watcher just
+    tries again on its next turn rather than dying over a heartbeat.
+    """
     makedirs(os.path.dirname(path))
     text = json.dumps(data, indent=2, sort_keys=True)
     if not isinstance(text, type(u"")):  # IronPython 2.7 hands back bytes
@@ -87,7 +93,11 @@ def write_json(path, data):
     tmp = path + ".tmp"
     with io.open(tmp, "w", encoding="utf-8") as handle:
         handle.write(text)
-    _replace(tmp, path)
+    try:
+        _replace(tmp, path)
+    except EnvironmentError:
+        _discard(tmp)  # never leave a half-written name lying around
+        raise
 
 
 def read_json(path):
@@ -129,6 +139,15 @@ def remove_file(path):
 def makedirs(path):
     if path and not os.path.isdir(path):
         os.makedirs(path)
+
+
+def _discard(path):
+    """Drop a temp file whose rename did not happen. The real error is being
+    re-raised by the caller, so failing to tidy up is not worth reporting."""
+    try:
+        os.remove(path)
+    except (IOError, OSError):
+        pass
 
 
 def _replace(src, dst):

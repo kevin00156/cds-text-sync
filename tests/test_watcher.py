@@ -118,6 +118,51 @@ def test_the_heartbeat_waits_its_turn(root):
     assert watch.beat_if_due(now + instances.HEARTBEAT_INTERVAL_S + 1.0) is True
 
 
+def test_a_locked_registration_defers_the_beat_instead_of_killing_it(root,
+                                                                     monkeypatch):
+    # A CLI reading the file holds it open, and Windows will not let the
+    # rename land. That is a missed beat, not the end of the watcher.
+    watch = watcher.Watcher(make_globals(), root)
+    watch.start()
+
+    def locked(_root, _reg):
+        raise OSError(13, "used by another process")
+
+    monkeypatch.setattr(instances, "write", locked)
+    now = ipc.now() + instances.HEARTBEAT_INTERVAL_S + 1.0
+    assert watch.beat_if_due(now) is False
+    monkeypatch.undo()
+    # _last_beat was left alone, so the very next turn retries.
+    assert watch.beat_if_due(now) is True
+
+
+def test_a_long_lock_is_reported_once_not_every_turn(root, monkeypatch, capsys):
+    # The retry happens every 50ms turn; saying so every time would bury the
+    # IDE's message view under hundreds of identical lines.
+    watch = watcher.Watcher(make_globals(), root)
+    watch.start()
+
+    def locked(_root, _reg):
+        raise OSError(13, "used by another process")
+
+    monkeypatch.setattr(instances, "write", locked)
+    now = ipc.now()
+    for turn in range(20):
+        watch.beat_if_due(now + instances.HEARTBEAT_INTERVAL_S + turn)
+    assert capsys.readouterr().out.count("heartbeat deferred") == 1
+
+
+def test_a_locked_registration_does_not_break_shutdown(root, monkeypatch):
+    watch = watcher.Watcher(make_globals(), root)
+    watch.start()
+
+    def locked(_root, _instance_id):
+        raise OSError(13, "used by another process")
+
+    monkeypatch.setattr(instances, "delete", locked)
+    watch.shutdown()  # the reason the loop stopped must not be buried here
+
+
 # --- one command -----------------------------------------------------------
 
 def run(watch, name, args=None):
@@ -219,6 +264,19 @@ def test_the_instance_goes_busy_while_a_command_runs(root):
     run(watch, "ping")
     assert seen["state"] == instances.STATE_BUSY
     assert instances.read(root, watch.instance_id)["state"] == instances.STATE_IDLE
+
+
+def test_answering_sweeps_results_nobody_came_back_for(root):
+    # A caller that timed out leaves its result behind; a watcher that runs
+    # for days would otherwise collect them forever.
+    watch = watcher.Watcher(make_globals(), root)
+    watch.start()
+    commands.write_result(root, watch.instance_id, {"id": "old-1", "ok": True})
+    stale = os.path.join(ipc.result_dir(root, watch.instance_id), "old-1.json")
+    os.utime(stale, (ipc.now() - 7200.0, ipc.now() - 7200.0))
+    fresh = run(watch, "ping")
+    assert commands.read_result(root, watch.instance_id, "old-1") is None
+    assert fresh["ok"] is True  # and the answer just written survived
 
 
 # --- the loop --------------------------------------------------------------

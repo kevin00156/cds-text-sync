@@ -53,6 +53,7 @@ class Watcher(object):
             watcher_version=version, now=now)
         self.instance_id = self.reg["instance_id"]
         self._last_beat = 0.0
+        self._deferring = False
         self.handlers = {
             "ping": self._ping,
             "status": self._status,
@@ -94,7 +95,14 @@ class Watcher(object):
 
     def shutdown(self):
         """Leave nothing behind for the next watcher to trip over."""
-        instances.delete(self.root, self.instance_id)
+        try:
+            instances.delete(self.root, self.instance_id)
+        except EnvironmentError as exc:
+            # A CLI reading the file right now holds it open. Leaving the
+            # registration behind is survivable — the next watcher's
+            # prune_stale clears it — and raising here would bury whatever
+            # actually stopped the loop.
+            print("watcher: could not clear %s (%s)" % (self.instance_id, exc))
         print("watcher: stopped " + self.instance_id)
 
     # -- one command -------------------------------------------------------
@@ -114,6 +122,10 @@ class Watcher(object):
             result = commands.new_result(cmd, False, started_at=started,
                                          error=traceback.format_exc())
         commands.write_result(self.root, self.instance_id, result)
+        # A caller that gave up before we answered leaves its result behind.
+        # Sweeping here keeps the directory bounded on a watcher that runs for
+        # days; the result just written is far too young to be caught.
+        commands.prune_results(self.root, self.instance_id)
         self._beat(ipc.now(), instances.STATE_IDLE)
         return result
 
@@ -182,15 +194,30 @@ class Watcher(object):
         now = ipc.now(now)
         if now - self._last_beat < instances.HEARTBEAT_INTERVAL_S:
             return False
-        self._beat(now)
-        return True
+        return self._beat(now)
 
     def _beat(self, now, state=None):
+        """Write the heartbeat, or shrug and let the next turn try again.
+
+        On Windows the registration cannot be replaced while a CLI has it open
+        for reading, and the CLI opens it on every command. The window is
+        microseconds and the next attempt is one loop turn away, so a missed
+        beat is not worth ending a watcher over. _last_beat is left alone so
+        the retry happens on the next turn rather than in two seconds.
+        """
         if state is not None:
             instances.set_state(self.reg, state, now)
         instances.stamp_heartbeat(self.reg, now)
-        instances.write(self.root, self.reg)
+        try:
+            instances.write(self.root, self.reg)
+        except EnvironmentError as exc:
+            if not self._deferring:  # once per episode, not once per turn
+                print("watcher: heartbeat deferred (%s)" % exc)
+                self._deferring = True
+            return False
+        self._deferring = False
         self._last_beat = now
+        return True
 
 
 def _info(text):
