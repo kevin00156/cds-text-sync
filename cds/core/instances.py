@@ -42,14 +42,20 @@ def new_registration(instance_id, pid, ide, project_path,
         "instance_id": instance_id,
         "pid": pid,
         "ide": ide,
-        "project_path": project_path,
-        "project_name": os.path.splitext(os.path.basename(project_path or ""))[0],
         "sync_dir": sync_dir,
         "started_at": ipc.iso(now),
         "watcher_version": watcher_version,
     }
+    set_project(reg, project_path)
     set_state(reg, STATE_IDLE, now)
     return stamp_heartbeat(reg, now)
+
+
+def set_project(reg, project_path):
+    """Record which project the IDE has open; it can change without a restart."""
+    reg["project_path"] = project_path
+    reg["project_name"] = os.path.splitext(os.path.basename(project_path or ""))[0]
+    return reg
 
 
 def stamp_heartbeat(reg, now=None):

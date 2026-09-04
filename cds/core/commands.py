@@ -73,13 +73,14 @@ def _command_path(root, instance_id, cmd_id):
 # --------------------------------------------------------------------------
 
 def new_result(cmd, ok, error=None, messages=None, needs_input=None,
-               stdout_tail=None, started_at=None, finished_at=None):
+               stdout_tail=None, started_at=None, finished_at=None, data=None):
     """Build the result record for a finished command.
 
     started_at and finished_at are epoch seconds. A failed result must carry
     an error text, so "it failed and I don't know why" cannot be written
     (PRINCIPLES.md 6). needs_input names the argument that would have answered
-    a dialog the script tried to pop.
+    a dialog the script tried to pop. data is whatever this particular command
+    has to hand back — status returns the live instance record there.
     """
     if not ok and not error:
         raise ValueError("a failed result must carry an error message")
@@ -96,6 +97,7 @@ def new_result(cmd, ok, error=None, messages=None, needs_input=None,
         "stdout_tail": stdout_tail or "",
         "error": error,
         "needs_input": needs_input,
+        "data": data,
     }
 
 

@@ -203,6 +203,16 @@ while running:
     system.delay(50)
 ```
 
+實作時偏離上面這段的三個地方：
+
+- **命令檔在執行前就刪掉，不是執行後。** 上面的資料流寫的是「執行、寫結果、刪命令檔」，
+  但看門人如果在匯入做到一半死掉，那個匯入下次啟動會再被撿到、再跑一次。丟掉一個結果
+  只是讓呼叫端等到逾時，重跑一次匯入會動到專案。所以改成讀到命令就先刪，再執行。
+- **同一個 IDE 不准啟動第二支看門人。** 實例編號是專案名加程序編號，同一個 IDE 裡跑兩支
+  會拿到同一個編號、搶同一個目錄。啟動時若發現同名登記檔還活著就直接報錯不啟動。
+- **`SilentSystem` 移到階段 2 才寫。** 階段 1 的三個命令（`ping`、`status`、`stop`）都是看門人
+  自己回答，不執行任何腳本，沒有東西需要攔截。PRINCIPLES §9 說先寫具體的東西。
+
 硬性規定：
 
 - 整支看門人不開執行緒、不 `time.sleep()`、不呼叫 `execute_on_primary_thread`。
@@ -262,10 +272,16 @@ python cli/cds_ide.py stop    [--target X]
   - [x] 驗收：測試綠（187 個，其中 49 個是新增的）。
 - [ ] **階段 1：看門人只會 ping、status、stop**
   - [x] 在 IDE 裡驗證 `import cds.core.ipc` 能過。三個 IDE 都過，見第 3 節第 8 點。
-  - [ ] `cds/ide/watcher.py` 主迴圈、心跳、`SilentSystem`（先只需要 `info/warning/error`）。
-  - [ ] `Project_watch.py` 薄入口。
-  - [ ] `cli/cds_ide.py` 的 `list`、`ping`、`status`、`stop`。
-  - [ ] 驗收：在 CODESYS 3.5.21.40 與 Delta 1.10 各開一個專案、各啟動看門人，`list` 看到兩個，`ping --target` 各自回得來，看門人跑著時人在 IDE 裡點選單、捲編輯器都不卡，`stop` 後登記檔消失。
+  - [x] `cds/ide/watcher.py` 主迴圈、心跳、命令分派。`SilentSystem` 移到階段 2，見第 6 節。
+  - [x] `Project_watch.py` 薄入口。
+  - [x] `cli/cds_ide.py` 的 `list`、`ping`、`status`、`stop`。
+  - [x] `tests/test_watcher.py`、`tests/test_cds_ide_cli.py`：看門人的迴圈與生命週期用假的 `system` 驅動，
+        CLI 與看門人在同一個行程裡對打，涵蓋完整往返、逾時、Ctrl+C 不留殘檔。
+  - [x] 驗收（無頭部分，2026-09-04 自動跑完）：在 CODESYS 3.5.21.40 與 Delta 1.10 各起一個無頭實例、
+        各跑一支看門人，`list` 看到兩個，`ping --target` 各自回得來，不給 `--target` 時以 exit code 2 列出候選，
+        `stop` 之後登記檔與子目錄都消失、IDE 程序自己退出。
+  - [ ] 驗收（還需要人）：專案開著的情況下重跑一次上面那串，並確認看門人跑著時人在 IDE 裡點選單、捲編輯器都不卡。
+        無頭實例沒有 UI 也沒有專案，這兩件事驗不到。
   - [ ] 順手確認：看門人跑著時能不能從選單再啟動別的腳本。
 - [ ] **階段 2：四個真命令**
   - [ ] `export`、`import`、`compare`、`build`，含第 6 節的攔截與 `needs_input`。
@@ -306,6 +322,8 @@ python cli/cds_ide.py stop    [--target X]
 2. `compare` 在 silent 模式要不要保留「互動式挑選」：預設不要，只回摘要。
 3. 心跳 2 秒、活著 10 秒、陳舊 60 秒這三個數字是起點，不是定案。
 4. `Project_Build.py` 與 `Project_export.py` 已超過 400 行的硬上限。這張工單不動它們，但不要再往裡面加東西。
+5. 登記檔的 `sync_dir` 階段 1 一律是 null。要填它得呼叫 `codesys_utils.load_base_dir()`，
+   而階段 1 的看門人還沒載入那些 `.pyw` 模組。階段 2 本來就要載入，屆時順手填上。
 
 ---
 
