@@ -6,10 +6,11 @@ IDE. Nothing in this repo has ever done that — the live scripts load .pyw
 files by path with imp.load_source instead. So find out before building on it
 (WATCHER_CLI_PLAN.md 3.8 and 11.1).
 
-Run it from Tools > Scripting > Execute Script File... inside any open IDE.
-It imports the three protocol modules, exercises them against a scratch
-directory under %TEMP%, and reports in a message box plus a log next to this
-file. Nothing in your project is touched.
+Run it from Tools > Scripting > Execute Script File... inside any open IDE, or
+headless with `CODESYS.exe --noUI --runscript="<this file>"`. It imports the
+three protocol modules, exercises them against a scratch directory under
+%TEMP%, and reports to the log beside this file — plus a message box, but only
+when there is a UI to show it in. Nothing in your project is touched.
 """
 import os
 import sys
@@ -50,7 +51,7 @@ def check():
 
     return "\n".join([
         "import cds.core: OK",
-        "python: " + sys.version.split()[0],
+        "python: " + sys.version.replace("\n", " "),
         "instance id: " + instance_id,
         "round trip: " + str(bool(result and result["ok"])),
         "resolve_target: " + picked["instance_id"],
@@ -64,4 +65,5 @@ except Exception:
     report = "import cds.core: FAILED\n\n" + traceback.format_exc()
 
 log(report)
-system.ui.info(report)
+if system.ui_present:  # --noUI has no message box to pop, and must not block
+    system.ui.info(report)

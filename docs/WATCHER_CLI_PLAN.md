@@ -59,7 +59,18 @@
 5. `load_base_dir()`（`codesys_utils.pyw` 第 455 行）讀專案屬性 `cds-sync-folder`，沒設就回傳 `(None, 錯誤訊息)`，不會彈窗。
 6. 腳本用 `resolve_projects(None, globals())` 找 `projects`，所以執行腳本的命名空間必須帶著 IDE 注入的 `projects`、`system`、`online` 等全域名稱。舊的 `Project_Daemon.py`（commit `4a66c05^`）用 `globals().copy()` 再 `exec`，可以參考。
 7. IronPython 2.7 的內建 `open()` 讀出來是位元組，不接受 `encoding=` 參數。讀寫 UTF-8 一律用 `io.open(path, encoding="utf-8-sig")` 或 `codecs.open`。這是 commit `82d9904` 付過學費的事。
-8. `cds/` 從來沒有在 IDE 裡被 import 過。協定模組如果放在 `cds/core/`，階段 1 的第一件事就是在 IDE 裡驗證 `import cds.core.ipc` 能過；不能過就退回 `.pyw` 形式。
+8. ~~`cds/` 從來沒有在 IDE 裡被 import 過。~~ **2026-09-04 已驗證可以。** 把 repo 根目錄加進 `sys.path` 之後，
+   `from cds.core import commands, instances, ipc` 在三個 IDE 都成功，而且完整跑完一輪
+   「寫命令、讀命令、寫結果、收結果、解析目標」。驗證腳本是 [`tools/probe_cds_import.py`](../tools/probe_cds_import.py)：
+
+   | IDE | IronPython | ScriptEngine | 結果 |
+   |---|---|---|---|
+   | CODESYS 3.5.21.40 | 2.7.12 | 4.2.0.0 | OK |
+   | Lenze PLC Designer 3.24.0 | 2.7.7 | 4.0.0.0 | OK |
+   | Delta DIADesigner-AX 1.10 | 2.7.7 | 4.0.0.0 | OK |
+
+   `os.getpid()` 三個都有，不必退回 `System.Diagnostics`。注意這三次都是無頭跑、沒有開專案，
+   證明的是模組解析與純 Python 邏輯，不是互動式 IDE 底下的行為。
 9. 本機三種 IDE 的 ScriptEngine 外掛版本：Delta 1.10 是 4.0.0.0，CODESYS 3.5.20.40 是 4.1.0.0，3.5.21.40 是 4.2.0.0。`system.delay()` 三個都有。
 10. `--runscript` 啟動時沒有看到獨立的進度視窗。從 Tools 選單啟動時有沒有，還沒量。
 
@@ -250,7 +261,7 @@ python cli/cds_ide.py stop    [--target X]
   - [x] `tests/test_ipc.py`、`tests/test_instances.py`、`tests/test_commands.py`：原子寫入、排序、心跳判活、目標解析的四種情況、`.tmp` 忽略。CPython 3 下 `python -m pytest` 全綠。
   - [x] 驗收：測試綠（187 個，其中 49 個是新增的）。
 - [ ] **階段 1：看門人只會 ping、status、stop**
-  - [ ] 在 IDE 裡驗證 `import cds.core.ipc` 能過。不能就改成 `.pyw`，並回頭改階段 0。
+  - [x] 在 IDE 裡驗證 `import cds.core.ipc` 能過。三個 IDE 都過，見第 3 節第 8 點。
   - [ ] `cds/ide/watcher.py` 主迴圈、心跳、`SilentSystem`（先只需要 `info/warning/error`）。
   - [ ] `Project_watch.py` 薄入口。
   - [ ] `cli/cds_ide.py` 的 `list`、`ping`、`status`、`stop`。
@@ -268,17 +279,30 @@ python cli/cds_ide.py stop    [--target X]
 
 ## 10. 測試方式
 
-- `cds/core/ipc.py` 全部 pytest，CPython 3.12，CI 現有設定就會跑（`conftest.py` 已把 repo 根目錄放進 `sys.path`）。
+- `cds/core/` 那三支全部 pytest，CPython 3.12，CI 現有設定就會跑（`conftest.py` 已把 repo 根目錄放進 `sys.path`）。
+- **不需要開 IDE 就能驗的 IronPython 行為，用無頭 `--runscript` 自己跑**，不必請人手動點。2026-09-04 三個 IDE 都成功：
+
+  ```
+  <exe> --profile="<設定檔名>" --noUI --runscript="<腳本絕對路徑>"
+  ```
+
+  `--noUI` 一定要配 `--profile`，少了會直接退出並印「you must specify a profile」。設定檔名就是
+  `<安裝根目錄>\...\Profiles\*.profile.xml` 的主檔名。本機三個是 `CODESYS V3.5 SP21 Patch 4`、
+  `PLC Designer V3.24.0`、`DIADesigner-AX 1.10`。腳本的 `print` 會進 stdout，抓得到。
+  無頭實例沒有專案也沒有 UI，所以這條路驗得了模組載入與純 Python 邏輯，驗不了
+  「使用者正在操作 IDE 時看門人卡不卡」——那個仍然只能手測。
 - 看門人與 CLI 的整合只能手測。每次手測前先用 `tools/probe_ui_responsive.py` 確認那台 IDE 在 `system.delay()` 下可操作，這支腳本從 Tools > Scripting > Execute Script File 執行，45 秒內試著點選單。
+- **這個 worktree 沒有掛進任何 IDE 的 ScriptDir**（`%LOCALAPPDATA%\CODESYS\ScriptDir\cds-text-sync` 指的是隔壁的主 repo），
+  所以 worktree 裡的腳本不會出現在 Tools > Scripting 的清單裡。手測時要嘛用 Execute Script File 指絕對路徑，
+  要嘛另外開一個 junction 指向這個 worktree。
 - IronPython 相容性：`from __future__ import print_function`、不用型別註記、不用 f-string、不用 `pathlib`，只用標準函式庫。
 
 ---
 
 ## 11. 未決事項（實作時決定，決定了寫回這裡）
 
-1. 協定模組放 `.py` 還是 `.pyw`：**還沒決定**，看階段 1 在 IDE 裡的 import 驗證。
-   階段 0 先照 `.py` 做，三支都在 `cds/core/`（見第 4 節的拆分說明）。三支都守 IronPython 2.7
-   相容規則，所以真要退回 `.pyw`，是搬檔案加載入器，不是重寫。
+1. ~~協定模組放 `.py` 還是 `.pyw`~~：**定案 `.py`，三支都在 `cds/core/`**（見第 4 節的拆分說明）。
+   2026-09-04 在三個 IDE 實測過 `import cds.core`，都成功，見第 3 節第 8 點。
 2. `compare` 在 silent 模式要不要保留「互動式挑選」：預設不要，只回摘要。
 3. 心跳 2 秒、活著 10 秒、陳舊 60 秒這三個數字是起點，不是定案。
 4. `Project_Build.py` 與 `Project_export.py` 已超過 400 行的硬上限。這張工單不動它們，但不要再往裡面加東西。
