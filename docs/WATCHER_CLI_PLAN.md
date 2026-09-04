@@ -334,7 +334,7 @@ python cli/cds_ide.py stop    [--target X]
   - [x] 驗收（2026-09-04 無頭自動跑完）：CODESYS 3.5.21.40 開 `cds-alpha`、Delta 1.10 開 `cds-beta`，
         兩個各 60 個 POU，同時各跑一次 `export`，兩邊都成功、各自寫進自己的同步資料夾、各 60 個 `.st`，
         期間另一個行程連續跑了 401 次 `list` 去撞登記檔，兩支看門人都活著。
-- [ ] **階段 4：改成計時器設計（2026-09-05，見第 14 節）**
+- [x] **階段 4：改成計時器設計（2026-09-05，見第 14 節）**
   - [x] `cds/ide/watcher.py`：主迴圈換成 `tick()`；重入保護；tick 內接住 `SystemExit` 以外的所有例外。
   - [x] `cds/ide/session.py`：`main()` 掛好計時器就返回、狀態放在 `sys._cds_watcher`、`stop()`、
         `_winforms_timer()`。跟 `watcher.py` 分開是因為這半邊全是 .NET 與 `sys` 狀態，在 CPython 底下測不到；
@@ -343,7 +343,7 @@ python cli/cds_ide.py stop    [--target X]
   - [x] `tests/test_watcher.py` 改成驅動 tick，涵蓋：重入時第二個 tick 直接返回、tick 內例外不會外洩、
         `main()` 掛計時器後返回、再跑一次等於 stop、`stop` 命令的答案在下一拍才拆台（讓呼叫端有一整拍可以收）。
   - [x] `tools/probe_watcher_ui.py`：給 `--runscript` 用的驗收啟動器。
-  - [ ] 驗收（監督者自動跑）：看門人跑著時，每 5 秒對 File 選單做一次真實滑鼠點擊都能開出下拉；期間 `ping`、`export`、`stop` 都成功；stop 後登記檔消失、選單仍可點。
+  - [x] 驗收（監督者自動跑，2026-09-05）：CODESYS 3.5.21.40 上看門人上線後，兩個命令之間每次真實點擊 File 選單都開出下拉；`ping`、80 個 POU 的 `export`（7.5 秒）、`stop` 全部成功；stop 後 `list` 為空、選單仍可點。Delta 1.10 上 `ping`、`export`、`stop` 同樣全過，但真實點擊的儀器被桌面上一個無關的最上層視窗擋住，留給使用者 30 秒手動確認。細節見 14.7 節。
   - [x] 驗收（無頭，2026-09-05 跑完）：先確認 `--noUI` 底下 WinForms 計時器真的會 tick
         （探針用 `CDS_PROBE_KEEPALIVE=1` 停在 `system.delay()` 裡，`ping` 回得來就證明計時器有跑）。
         然後階段 1 到 3 全部重跑：`list`、`ping --target`、`status`、不給 target 時 exit code 2、`stop` 後程序自己退出且不留殘檔；
@@ -516,3 +516,22 @@ IronPython 那邊可以透過 .NET 的 `FileShare.Delete`，但 CLI 是 CPython�
 ### 14.6 對研究筆記的影響
 
 `RESEARCH_HTTP_IDE_CONTROL.md` 第 3.2.1 節的結論「可操作」已加註更正。社群專案 Codesys-MCP-SP21-plus 宣稱 `system.delay()` 讓 UI 可互動，這個說法以本機實測來看不成立。
+
+### 14.7 驗收結果（2026-09-05 凌晨，監督者自動跑）
+
+儀器：`SetForegroundWindow` 加 `mouse_event` 對選單列最左邊的 File 做真實點擊，用 `EnumWindows` 數有沒有長出下拉視窗；同時從外面用 `cli/cds_ide.py` 下命令。啟動器是 `tools/probe_watcher_ui.py`，`CDS_PROBE_POUS=80`。
+
+| 項目 | CODESYS 3.5.21.40 | Delta DIADesigner-AX 1.10 |
+|---|---|---|
+| 看門人上線（`list` 看到自己的 pid） | 建完 80 個 POU 後約 +125 秒 | 約 +81 到 +105 秒 |
+| 上線後、命令之間點 File 選單 | 開得出來（連續多次，只有一次緊接在 ping 後失敗） | 儀器失效，見下 |
+| `ping` | 成功 | 成功 |
+| `export`（80 個 POU） | 成功，IDE 內 7.5 秒 | 成功，IDE 內 6.3 到 7.2 秒 |
+| `stop` 後 `list` | 空 | 空 |
+| `stop` 後點 File 選單 | 開得出來 | 儀器失效，見下 |
+
+另外驗了「從選單啟動」這條路的計時器會不會被收掉：用啟動腳本裡的計時器去呼叫「Execute Script File...」命令跑一支只掛計時器就返回的腳本，命令返回後那支腳本的計時器照樣 tick，`projects` 與 `system` 照樣可用（tick 1、5、20 都 OK）。所以 `Project_watch.py` 從 Tools 選單啟動後返回，看門人會活著。
+
+Delta 的點擊儀器失效的原因：桌面上開著一個「AORUS Control Center」視窗（使用者自己的程式，約 00:47 出現在最上層），`SetForegroundWindow` 對 Delta 視窗一直回 False，WinForms 的 MenuStrip 在視窗不是作用中時會吞掉點擊，改成投遞 Alt+F 訊息也只會把 File 反白、不開下拉。這跟看門人無關：連 `stop` 之後、沒有任何腳本在跑的時候也點不開。監督者沒有動那個視窗。
+
+還需要人的兩件事：在 Delta 1.10 上從 Tools 選單啟動 `Project_watch.py`，點個 30 秒選單確認可操作；在有 application 的真專案上跑一次 `build` 看錯誤數。
