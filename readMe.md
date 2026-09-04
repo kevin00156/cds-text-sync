@@ -244,7 +244,7 @@ Updates the CODESYS project from the files on disk.
 
 ### 9. `Project_watch.py` (Command Watcher)
 
-**Leave it running and drive this IDE from a terminal.** It listens for commands from `cli/cds_ide.py` and runs export, import, compare or build for you, without you closing the project. See [Driving the IDE from a terminal](#-driving-the-ide-from-a-terminal) below.
+**Run it once and drive this IDE from a terminal.** The script ends immediately and leaves a listener behind, so the IDE is yours while `cli/cds_ide.py` runs export, import, compare or build in it. Run it a second time to stop the listener. See [Driving the IDE from a terminal](#-driving-the-ide-from-a-terminal) below.
 
 ### 10. `Project_perf_test.py` (Benchmarking)
 
@@ -286,7 +286,7 @@ It resolves project functions/FB method calls across files (including FB instanc
 
 ## 🎛️ Driving the IDE from a terminal
 
-Open your project, run `Project_watch.py` from **Tools > Scripting**, and leave it running. It sits in the IDE waiting for commands. From any terminal:
+Open your project and run `Project_watch.py` once from **Tools > Scripting**. It finishes straight away, leaving a listener behind in the IDE. From any terminal:
 
 ```powershell
 python cli/cds_ide.py list                  # which IDEs are listening
@@ -299,9 +299,11 @@ python cli/cds_ide.py stop                  # shut the watcher down
 
 ### What "the IDE stays usable" does and does not mean
 
-**Waiting does not block the IDE.** Between commands the watcher parks in `system.delay()`, which keeps serving the IDE's message loop, so menus, editors and scrolling all work as usual.
+**The script ends; a timer does the listening.** `Project_watch.py` arms a timer on the IDE's own message loop and returns within a second. That return is the whole point. A script that keeps running owns the main thread, and while it does, CODESYS keeps repainting the window but stops delivering your mouse and keyboard — the IDE looks alive and cannot be clicked. Between commands the IDE is genuinely, fully yours.
 
-**Running a command does block it.** While an export or import is actually running, the IDE is busy for those few seconds, exactly as it is when you run the script from the menu yourself. That is a property of the CODESYS object model — every call has to happen on the UI thread — and no design on this side can change it. Expect the IDE to freeze for the length of the command and come back afterwards.
+**Running a command does block it.** While an export or import is actually running, the IDE is busy for those few seconds, exactly as it is when you run the script from the menu yourself. Every object-model call has to happen on the UI thread, and no design on this side can change that. Expect the IDE to stop responding for the length of the command and come back afterwards.
+
+**Stopping it.** Run `Project_watch.py` a second time, or use `cds_ide.py stop`. Both do the same thing: stop the timer and clear the instance directory.
 
 ### Answering the questions the scripts would have asked
 

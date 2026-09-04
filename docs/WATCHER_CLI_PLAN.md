@@ -72,7 +72,13 @@
    `os.getpid()` 三個都有，不必退回 `System.Diagnostics`。注意這三次都是無頭跑、沒有開專案，
    證明的是模組解析與純 Python 邏輯，不是互動式 IDE 底下的行為。
 9. 本機三種 IDE 的 ScriptEngine 外掛版本：Delta 1.10 是 4.0.0.0，CODESYS 3.5.20.40 是 4.1.0.0，3.5.21.40 是 4.2.0.0。`system.delay()` 三個都有。
-10. `--runscript` 啟動時沒有看到獨立的進度視窗。從 Tools 選單啟動時有沒有，還沒量。
+10. ~~`--runscript` 啟動時沒有看到獨立的進度視窗。從 Tools 選單啟動時有沒有，還沒量。~~
+    **2026-09-05 已量，而且進度視窗不是重點。** 兩條啟動路徑在腳本跑著的時候都一樣點不動，
+    根因是 `system.delay()` 不處理滑鼠鍵盤，見第 14 節。腳本返回後兩條路都恢復正常。
+11. **WinForms 計時器在 `--noUI` 底下也會 tick**（2026-09-05 實測）。無頭實例沒有使用者，
+    所以可以讓腳本停在 `system.delay()` 裡不返回，計時器照樣跑得到。
+    `tools/probe_watcher_ui.py` 的 `CDS_PROBE_KEEPALIVE=1` 就是幹這個的，讓無頭驗收跑得起來。
+    **絕對不要在有 UI 的情況下開這個開關**，那正是這次要修掉的病。
 
 ---
 
@@ -86,10 +92,14 @@ cds/core/instances.py  實例登記檔、心跳、判活、清理陳舊登記、
 cds/core/commands.py   命令檔與結果檔的投遞與回收。
                        這三支都是純 Python，IronPython 2.7 與 CPython 3 都要能跑，
                        pytest 全覆蓋。
-cds/ide/watcher.py     看門人：主迴圈、silent UI 代理、呼叫四支腳本的入口函式。
-                       唯一碰 system/projects 的新程式碼。
+cds/ide/watcher.py     看門人每一拍做什麼：撿命令、執行、寫結果、心跳。不含啟動與停止，
+                       所以在 CPython 底下測得到。
+cds/ide/session.py     把看門人裝進一個活著的 IDE 再拆下來：掛計時器、腳本返回、
+                       狀態放 sys、停止。這一半全是 .NET 與 sys 狀態，測不到。
+cds/ide/silent.py      沒有人可以按對話框時，怎麼把 Project_*.py 跑完。
 Project_watch.py       薄入口，跟其他 Project_*.py 一樣出現在 Tools > Scripting > Scripts。
 cli/cds_ide.py         CPython 3 的 CLI，只依賴 cds/core 的那三支。
+tools/probe_watcher_ui.py  驗收用的啟動器，給 --runscript 跑。
 tests/test_ipc.py      三支協定模組各自一個測試檔。
 tests/test_instances.py
 tests/test_commands.py
@@ -219,8 +229,9 @@ while running:
 硬性規定：
 
 - 整支看門人不開執行緒、不 `time.sleep()`、不呼叫 `execute_on_primary_thread`。
-- `system.abortable = True`。使用者按進度顯示上的 Cancel 會丟 `KeyboardInterrupt`，要接住並走正常結束（刪登記檔）。
-- 每個命令的執行都包在 `try/except Exception`，錯誤寫進結果檔，迴圈繼續。看門人本身只有在 `stop` 或 Cancel 時才結束。
+- ~~`system.abortable = True`，按 Cancel 會丟 `KeyboardInterrupt`。~~ **2026-09-05 拿掉。**
+  腳本已經不在跑，沒有進度顯示也沒有 Cancel 可按。停止方式改成 CLI `stop` 或再跑一次腳本。
+- 每個命令的執行都包在 `try/except Exception`，錯誤寫進結果檔，看門人繼續。
 - 看門人是唯一碰 `system` 與 `projects` 的新程式碼，放在 `cds/ide/`。
 
 silent 模式的作法：
@@ -324,12 +335,21 @@ python cli/cds_ide.py stop    [--target X]
         兩個各 60 個 POU，同時各跑一次 `export`，兩邊都成功、各自寫進自己的同步資料夾、各 60 個 `.st`，
         期間另一個行程連續跑了 401 次 `list` 去撞登記檔，兩支看門人都活著。
 - [ ] **階段 4：改成計時器設計（2026-09-05，見第 14 節）**
-  - [ ] `cds/ide/watcher.py`：主迴圈換成 `Timer.Tick` 處理器；`main()` 掛好計時器就返回；狀態放在 `sys` 的屬性上；重入保護；tick 內接住所有例外。
-  - [ ] `Project_watch.py`：再跑一次等於 stop（切換式），跟 CLI `stop` 一樣的收尾。
-  - [ ] `tests/test_watcher.py` 改成驅動 tick，涵蓋：重入時第二個 tick 直接返回、tick 內例外不會外洩、stop 後計時器停掉且登記檔消失。
-  - [ ] `tools/probe_watcher_ui.py`：給 `--runscript` 用的驗收啟動器，建一個臨時專案並設好 `cds-sync-folder`，然後走跟 `Project_watch.py` 一樣的啟動路徑並返回。監督者會用它做真實點擊的自動驗收。
+  - [x] `cds/ide/watcher.py`：主迴圈換成 `tick()`；重入保護；tick 內接住 `SystemExit` 以外的所有例外。
+  - [x] `cds/ide/session.py`：`main()` 掛好計時器就返回、狀態放在 `sys._cds_watcher`、`stop()`、
+        `_winforms_timer()`。跟 `watcher.py` 分開是因為這半邊全是 .NET 與 `sys` 狀態，在 CPython 底下測不到；
+        分開之後 `watcher.py` 那半邊測得到，兩邊合起來原本是 328 行，也超過 PRINCIPLES §2 的 300 行軟目標。
+  - [x] `Project_watch.py`：再跑一次等於 stop（切換式），跟 CLI `stop` 一樣的收尾。拿掉 `system.abortable` 與 `KeyboardInterrupt`。
+  - [x] `tests/test_watcher.py` 改成驅動 tick，涵蓋：重入時第二個 tick 直接返回、tick 內例外不會外洩、
+        `main()` 掛計時器後返回、再跑一次等於 stop、`stop` 命令的答案在下一拍才拆台（讓呼叫端有一整拍可以收）。
+  - [x] `tools/probe_watcher_ui.py`：給 `--runscript` 用的驗收啟動器。
   - [ ] 驗收（監督者自動跑）：看門人跑著時，每 5 秒對 File 選單做一次真實滑鼠點擊都能開出下拉；期間 `ping`、`export`、`stop` 都成功；stop 後登記檔消失、選單仍可點。
-  - [ ] 驗收（無頭）：既有的階段 1 到 3 無頭驗收重跑一次，全部照舊通過。
+  - [x] 驗收（無頭，2026-09-05 跑完）：先確認 `--noUI` 底下 WinForms 計時器真的會 tick
+        （探針用 `CDS_PROBE_KEEPALIVE=1` 停在 `system.delay()` 裡，`ping` 回得來就證明計時器有跑）。
+        然後階段 1 到 3 全部重跑：`list`、`ping --target`、`status`、不給 target 時 exit code 2、`stop` 後程序自己退出且不留殘檔；
+        `export` 寫出 5 個 `.st`、`compare` 在同步時與有新檔時都正確、`import` 不帶 `--yes` 回 `needs_input`、`import --yes` 真的建了物件；
+        CODESYS 3.5.21.40 與 Delta 1.10 各 60 個 POU 同時匯出，兩邊各 60 個 `.st`，期間 158 次 `list` 撞登記檔，
+        沒有任何一次 `tick failed` 或 `heartbeat deferred`。
 
 ---
 

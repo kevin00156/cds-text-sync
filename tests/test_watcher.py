@@ -1,34 +1,25 @@
 # -*- coding: utf-8 -*-
-"""Tests for cds.ide.watcher.
+"""Tests for cds.ide.watcher and the arming half in cds.ide.session.
 
 The watcher takes the CODESYS globals as an argument instead of reaching for
-them, so a fake `system` and a fake `projects` are enough to drive the whole
-loop under CPython. What this cannot show is whether the real IDE stays usable
-while system.delay() runs — that is the hand test in WATCHER_CLI_PLAN.md 9.
+them, and its timer comes from an injected factory, so a fake `system`, a fake
+`projects` and a fake timer are enough to drive everything under CPython.
+What this cannot show is whether the real IDE is clickable while the watcher
+runs — that needs real mouse input (WATCHER_CLI_PLAN.md 14.5).
 """
 import os
 
 import pytest
 
 from cds.core import commands, instances, ipc
-from cds.ide import watcher
+from cds.ide import session, watcher
 
 
 class FakeSystem(object):
-    """Counts delays and stops the loop, standing in for CODESYS's `system`."""
-
-    def __init__(self, stop_after=None):
-        self.abortable = False
-        self.delays = 0
-        self.stop_after = stop_after
-        self.on_delay = None
+    """Stands in for CODESYS's `system`."""
 
     def delay(self, milliseconds):
-        self.delays += 1
-        if self.on_delay is not None:
-            self.on_delay(self.delays)
-        if self.stop_after is not None and self.delays >= self.stop_after:
-            raise KeyboardInterrupt()
+        pass
 
 
 class FakeProject(object):
@@ -41,13 +32,37 @@ class FakeProjects(object):
         self.primary = FakeProject(path) if path else None
 
 
-def make_globals(path="C:\\p\\softplc.project", stop_after=None):
-    return {"system": FakeSystem(stop_after), "projects": FakeProjects(path)}
+class FakeTimer(object):
+    """Stands in for System.Windows.Forms.Timer; ticks only when told to."""
+
+    def __init__(self, interval_ms, handler):
+        self.interval_ms = interval_ms
+        self.handler = handler
+        self.started = True
+        self.disposed = False
+
+    def Stop(self):
+        self.started = False
+
+    def Dispose(self):
+        self.disposed = True
+
+
+def make_globals(path="C:\\p\\softplc.project"):
+    return {"system": FakeSystem(), "projects": FakeProjects(path)}
 
 
 @pytest.fixture
 def root(tmp_path):
     return str(tmp_path)
+
+
+@pytest.fixture(autouse=True)
+def no_leftover_watcher():
+    """A watcher parks itself on sys; never let one leak between tests."""
+    yield
+    if session.current() is not None:
+        delattr(session.sys, session.STATE_ATTR)
 
 
 # --- registration ----------------------------------------------------------
@@ -66,13 +81,6 @@ def test_start_makes_the_command_and_result_directories(root):
     watch.start()
     assert os.path.isdir(ipc.command_dir(root, watch.instance_id))
     assert os.path.isdir(ipc.result_dir(root, watch.instance_id))
-
-
-def test_start_turns_on_cancelling(root):
-    # Without this, Cancel on the progress display cannot stop the loop.
-    ide = make_globals()
-    watcher.Watcher(ide, root).start()
-    assert ide["system"].abortable is True
 
 
 def test_shutdown_leaves_nothing_behind(root):
@@ -137,7 +145,7 @@ def test_a_locked_registration_defers_the_beat_instead_of_killing_it(root,
 
 
 def test_a_long_lock_is_reported_once_not_every_turn(root, monkeypatch, capsys):
-    # The retry happens every 50ms turn; saying so every time would bury the
+    # The retry happens on every tick; saying so each time would bury the
     # IDE's message view under hundreds of identical lines.
     watch = watcher.Watcher(make_globals(), root)
     watch.start()
@@ -208,7 +216,7 @@ def test_status_survives_the_project_being_closed(root):
     assert run(watch, "status")["data"]["project_path"] is None
 
 
-def test_stop_ends_the_loop(root):
+def test_stop_takes_the_watcher_out_of_service(root):
     watch = watcher.Watcher(make_globals(), root)
     watch.start()
     assert run(watch, "stop")["ok"] is True
@@ -279,23 +287,104 @@ def test_answering_sweeps_results_nobody_came_back_for(root):
     assert fresh["ok"] is True  # and the answer just written survived
 
 
-# --- the loop --------------------------------------------------------------
+# --- the tick --------------------------------------------------------------
 
-def test_the_loop_runs_a_queued_command_and_stops_on_stop(root):
-    ide = make_globals(stop_after=200)
-    watch = watcher.Watcher(ide, root)
+def test_a_tick_answers_one_queued_command(root):
+    watch = watcher.Watcher(make_globals(), root)
     watch.start()
     commands.write_command(root, watch.instance_id, "ping",
                            cmd_id="1725453665000-aaaaaa")
-    commands.write_command(root, watch.instance_id, "stop",
-                           cmd_id="1725453665001-bbbbbb")
-    watch.run()
+    assert watch.tick() is True
     assert commands.read_result(root, watch.instance_id,
                                 "1725453665000-aaaaaa")["ok"] is True
-    assert ide["system"].delays == 2  # one per loop turn, not one per poll
 
 
-def test_cancelling_the_script_shuts_the_watcher_down(root):
-    ide = make_globals(stop_after=3)
-    watch = watcher.main(ide, root)
+def test_an_idle_tick_just_beats(root):
+    watch = watcher.Watcher(make_globals(), root)
+    watch.start()
+    assert watch.tick() is True
+    assert commands.list_command_ids(root, watch.instance_id) == []
+
+
+def test_a_tick_that_arrives_mid_command_turns_straight_around(root):
+    # An import pumps messages of its own, so the timer fires again while the
+    # import is still going. Two imports at once would be a disaster.
+    watch = watcher.Watcher(make_globals(), root)
+    watch.start()
+    seen = []
+
+    def reentrant(cmd, started):
+        seen.append(watch.tick())  # the timer, firing inside the command
+        return commands.new_result(cmd, True, started_at=started)
+
+    watch.handlers["ping"] = reentrant
+    commands.write_command(root, watch.instance_id, "ping")
+    watch.tick()
+    assert seen == [False]
+
+
+def test_a_tick_never_lets_an_exception_escape(root, capsys):
+    # An exception out of a WinForms handler becomes a thread-exception dialog.
+    watch = watcher.Watcher(make_globals(), root)
+    watch.start()
+
+    def boom(*args, **kwargs):
+        raise KeyboardInterrupt("even a BaseException")
+
+    watch.beat_if_due = boom
+    assert watch.tick() is True
+    assert "tick failed" in capsys.readouterr().out
+    assert watch.busy is False  # and the guard was released
+
+
+# --- arming and disarming --------------------------------------------------
+
+def test_main_arms_a_timer_and_returns(root):
+    made = []
+
+    def factory(interval_ms, handler):
+        made.append(FakeTimer(interval_ms, handler))
+        return made[-1]
+
+    watch = session.main(make_globals(), root, timer_factory=factory)
+    assert made[0].interval_ms == session.TICK_MS
+    assert session.current() is watch
+    assert instances.is_alive(instances.read(root, watch.instance_id))
+    made[0].handler()  # a WinForms tick arrives with no arguments used here
+    assert watch.running is True
+
+
+def test_running_the_script_again_stops_the_watcher(root):
+    timers = []
+
+    def factory(interval_ms, handler):
+        timers.append(FakeTimer(interval_ms, handler))
+        return timers[-1]
+
+    watch = session.main(make_globals(), root, timer_factory=factory)
+    assert session.main(make_globals(), root, timer_factory=factory) is None
+    assert len(timers) == 1  # the second run stopped, it did not start
+    assert timers[0].started is False and timers[0].disposed is True
+    assert session.current() is None
     assert instances.read(root, watch.instance_id) is None
+
+
+def test_the_stop_command_tears_down_on_the_following_tick(root):
+    # The answer to `stop` has to survive long enough to be collected.
+    timers = []
+
+    def factory(interval_ms, handler):
+        timers.append(FakeTimer(interval_ms, handler))
+        return timers[-1]
+
+    watch = session.main(make_globals(), root, timer_factory=factory)
+    on_tick = timers[0].handler
+    cmd = commands.write_command(root, watch.instance_id, "stop")
+    on_tick()
+    assert commands.read_result(root, watch.instance_id, cmd["id"])["ok"] is True
+    assert timers[0].started is True  # still there for the caller to read it
+
+    on_tick()
+    assert timers[0].started is False and timers[0].disposed is True
+    assert instances.read(root, watch.instance_id) is None
+    assert session.current() is None

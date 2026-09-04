@@ -1,12 +1,15 @@
 # -*- coding: utf-8 -*-
-"""The command loop that keeps one IDE listening while you keep working in it.
+"""What one IDE's watcher does on each tick: claim a command, answer it, beat.
 
-It never returns and it never leaves the main thread. Waiting is done with
-system.delay(), which serves the IDE's message loop, so the IDE stays usable
-between commands — see docs/RESEARCH_HTTP_IDE_CONTROL.md 3.2. While a command
-actually runs the IDE is busy; that is the platform, not a bug here.
+Nothing here starts or stops a watcher — cds/ide/session.py does that, and it
+does it by arming a timer and letting the script end, because a script that
+keeps running holds the main thread and leaves the IDE unclickable
+(WATCHER_CLI_PLAN.md 14). Keeping that half out of this file is what lets this
+half be tested under CPython.
 
-No threads, no time.sleep(), no execute_on_primary_thread (SP21 removed it).
+Ticks land on the UI thread, so object-model calls from them are legal and no
+cross-thread machinery is needed. No threads, no time.sleep(), no
+execute_on_primary_thread (SP21 removed it).
 
 A command is claimed by deleting its file *before* running it. The plan had
 the delete last, but a watcher that dies mid-import would then find the same
@@ -22,7 +25,6 @@ import traceback
 from cds.core import commands, instances, ipc
 from cds.ide import silent
 
-POLL_MS = 50
 
 # The repo root, where the Project_*.py scripts live: cds/ide/watcher.py -> ../../
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -38,13 +40,15 @@ SCRIPTS = {
 
 
 class Watcher(object):
-    """One IDE's command loop: claim, run, answer, beat, wait."""
+    """One IDE's listener: on every tick, claim a command, answer it, beat."""
 
     def __init__(self, ide_globals, root=None, version=None):
         self.ide = ide_globals
         self.system = ide_globals["system"]
         self.root = root or ipc.default_root()
         self.running = True
+        self.busy = False
+        self.timer = None
         now = ipc.now()
         path = self._open_project_path()
         self.reg = instances.new_registration(
@@ -71,7 +75,6 @@ class Watcher(object):
         ipc.ensure_dirs(self.root, self.instance_id)
         commands.prune_results(self.root, self.instance_id)
         self._beat(ipc.now())
-        self.system.abortable = True  # Cancel on the progress display -> KeyboardInterrupt
         print("watcher: listening as " + self.instance_id)
         print("watcher: " + ipc.instance_dir(self.root, self.instance_id))
 
@@ -84,14 +87,31 @@ class Watcher(object):
                 "before starting another" % (self.instance_id,
                                              existing.get("started_at")))
 
-    def run(self):
-        """Poll until stop or Cancel. The only place that waits."""
-        while self.running:
+    def tick(self):
+        """One turn: take a command if there is one, answer it, beat.
+
+        Never raises — an exception escaping a WinForms handler becomes a
+        thread-exception dialog that can take the IDE down. Returns whether a
+        turn actually happened.
+        """
+        if not self.running or self.busy:
+            # Not running: the teardown belongs to whoever armed us. Busy: a
+            # command is pumping messages of its own and the timer fired again
+            # on top of it. One command at a time.
+            return False
+        self.busy = True
+        try:
             cmd = commands.next_command(self.root, self.instance_id)
             if cmd is not None:
                 self.run_one(cmd)
             self.beat_if_due()
-            self.system.delay(POLL_MS)
+        except SystemExit:
+            raise
+        except BaseException:
+            print("watcher: tick failed\n" + traceback.format_exc())
+        finally:
+            self.busy = False
+        return True
 
     def shutdown(self):
         """Leave nothing behind for the next watcher to trip over."""
@@ -222,16 +242,3 @@ class Watcher(object):
 
 def _info(text):
     return {"level": "info", "text": text}
-
-
-def main(ide_globals, root=None, version=None):
-    """Entry point for Project_watch.py. Returns only when told to stop."""
-    watcher = Watcher(ide_globals, root, version)
-    watcher.start()
-    try:
-        watcher.run()
-    except KeyboardInterrupt:  # the user hit Cancel on the progress display
-        print("watcher: cancelled")
-    finally:
-        watcher.shutdown()
-    return watcher
