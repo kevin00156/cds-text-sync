@@ -228,6 +228,23 @@ silent 模式的作法：
 4. 再呼叫入口函式。期間把 `sys.stdout` 換成「同時寫進原本 stdout 和一個緩衝區」的物件，結束後把緩衝區最後 200 行放進結果。
 5. `NeedsInput` 被接住時，結果的 `ok` 是 false，`needs_input` 放問題原文與該用的參數名。
 
+實作時發現的四件事，都寫在 `cds/ide/silent.py` 裡：
+
+- **只換腳本自己的 `system` 不夠，`__main__.system` 也要換。** `codesys_utils.pyw` 第 517 行找 `system`
+  的順序是「自己模組的 globals，再來 `__main__`」，而那些 `.pyw` 是用 `imp.load_source` 載入的，
+  自己的 globals 裡沒有 `system`，所以一律走到 `__main__`。只換 exec 命名空間的話，那條路會拿到真的 UI。
+- **`NeedsInput` 繼承 `BaseException` 而不是 `Exception`。** `Project_Build.py` 第 73 行把
+  `system.ui.choose` 整段包在 `except Exception` 裡，如果 `NeedsInput` 是普通例外就會被吃掉，
+  然後腳本會退回「編譯 active application」，等於使用者沒指定要編哪個、卻默默編了另一個。
+  這跟 `KeyboardInterrupt` 不能被應用層的錯誤處理吃掉是同一個道理。
+- **`exec` 要餵位元組不能餵 unicode。** 四支腳本都有 `# -*- coding: utf-8 -*-`，
+  Python 2 的 `compile()` 碰到帶編碼宣告的 unicode 原始碼會直接丟 SyntaxError。所以用二進位模式讀檔，
+  順手把 BOM 去掉（Python 2 的 `compile()` 也不吃 BOM）。
+- **成功與失敗只能從對話框的層級判斷。** 四支腳本的 `main()` 不論成敗都回 `None`，
+  唯一的訊號是它有沒有呼叫 `system.ui.error` 或 `system.ui.warning`。所以規則是：
+  代理 UI 收到 `warning` 或 `error` 就算這個命令失敗。這四支腳本裡這兩個層級只出現在中止的地方，
+  規則成立；以後有人加了純資訊性的 warning，這裡要跟著改。
+
 薄入口 `Project_watch.py`：跟其他 `Project_*.py` 一樣的檔頭與模組載入方式，唯一的工作是把自己的目錄加進 `sys.path`、`import cds.ide.watcher`、呼叫 `watcher.main(globals())`。
 
 ---
@@ -284,8 +301,16 @@ python cli/cds_ide.py stop    [--target X]
         無頭實例沒有 UI 也沒有專案，這兩件事驗不到。
   - [ ] 順手確認：看門人跑著時能不能從選單再啟動別的腳本。
 - [ ] **階段 2：四個真命令**
-  - [ ] `export`、`import`、`compare`、`build`，含第 6 節的攔截與 `needs_input`。
-  - [ ] 驗收：從另一個終端 `export` 後磁碟出現 `.st`；在磁碟新建一個 `.st`，`import --yes` 後 IDE 裡真的出現該物件；`build` 回錯誤數；`import` 不帶 `--yes` 回 `needs_input` 且 IDE 沒有彈窗；命令執行中 IDE 忙、結束後恢復。
+  - [x] `cds/ide/silent.py`：代理 UI、攔截三個 `codesys_ui` 對話框、換掉 `__main__.system`、捕捉 stdout 尾巴、`NeedsInput`。
+  - [x] `export`、`import`、`compare`、`build` 接上四支活著的 `Project_*.py` 的 `main()`。
+  - [x] `cli/cds_ide.py` 的四個子命令與 `--delete-orphans`、`--yes`、`--force`、`--app`。
+  - [x] `tests/test_silent.py`：用形狀跟真腳本一樣的替身腳本驗證命名空間、對話框作答、stdout 尾巴、還原。
+  - [x] 驗收（2026-09-04 在無頭的 CODESYS 3.5.21.40 上自動跑完，用 `%TEMP%\cds-wtest\wtest.project` 這個臨時專案）：
+        `export` 之後磁碟出現 `Sample.st`，內容正確；在磁碟新建 `Greeter.st` 之後 `compare` 回報「only on disk 1」；
+        `import` 不帶 `--yes` 回 `needs_input`、exit code 1、沒有任何彈窗；`import --yes` 之後 `Greeter` 真的出現在 IDE 的物件樹裡。
+  - [ ] 驗收（還需要人）：`build` 回錯誤數。臨時專案是 `projects.create()` 建的空專案，沒有裝置也沒有 application，
+        `active_application` 直接丟 `ValueError`。看門人有正確接住並回報 traceback，但「回錯誤數」這條要有 application 的真專案才驗得到。
+  - [ ] 驗收（還需要人）：命令執行中 IDE 忙、結束後恢復。無頭實例沒有 UI，看不到。
 - [ ] **階段 3：收尾**
   - [ ] CLI 逾時、中途 Ctrl+C 不留殘檔、看門人重啟後清掉陳舊登記。
   - [ ] readMe 加一節「CLI 與看門人」，寫清楚「等待不卡、執行會忙」。
@@ -319,7 +344,9 @@ python cli/cds_ide.py stop    [--target X]
 
 1. ~~協定模組放 `.py` 還是 `.pyw`~~：**定案 `.py`，三支都在 `cds/core/`**（見第 4 節的拆分說明）。
    2026-09-04 在三個 IDE 實測過 `import cds.core`，都成功，見第 3 節第 8 點。
-2. `compare` 在 silent 模式要不要保留「互動式挑選」：預設不要，只回摘要。
+2. ~~`compare` 在 silent 模式要不要保留「互動式挑選」~~：**定案不要**。`show_compare_dialog` 被換成一個
+   直接回 `(None, [])` 的函式，並把那個視窗本來要列的數字寫成一則訊息（改了幾個、只在 IDE 有幾個、
+   只在磁碟有幾個、搬過家幾個、一樣的幾個）。逐一物件的清單腳本本來就印在 stdout，會進 `stdout_tail`。
 3. 心跳 2 秒、活著 10 秒、陳舊 60 秒這三個數字是起點，不是定案。
 4. `Project_Build.py` 與 `Project_export.py` 已超過 400 行的硬上限。這張工單不動它們，但不要再往裡面加東西。
 5. 登記檔的 `sync_dir` 階段 1 一律是 null。要填它得呼叫 `codesys_utils.load_base_dir()`，

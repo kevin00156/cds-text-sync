@@ -120,13 +120,82 @@ def test_a_failed_command_exits_one(watch, monkeypatch, capsys):
     assert "the IDE said no" in capsys.readouterr().err
 
 
-def test_a_command_that_needs_an_answer_exits_one(watch, monkeypatch, capsys):
+def test_the_reason_is_not_printed_twice(watch, monkeypatch, capsys):
+    # error is usually just the first bad message wearing another hat.
     watch.handlers["ping"] = lambda cmd, started: commands.new_result(
-        cmd, False, error="Confirm Import", started_at=started,
+        cmd, False, error="no project open", started_at=started,
+        messages=[{"level": "error", "text": "no project open"}])
+    answering(watch, monkeypatch)
+    cds_ide.main(["ping"])
+    printed = capsys.readouterr()
+    assert (printed.out + printed.err).count("no project open") == 1
+
+
+def test_a_failure_shows_what_the_script_printed(watch, monkeypatch, capsys):
+    watch.handlers["ping"] = lambda cmd, started: commands.new_result(
+        cmd, False, error="it broke", started_at=started,
+        stdout_tail="the last thing the IDE said")
+    answering(watch, monkeypatch)
+    cds_ide.main(["ping"])
+    assert "the last thing the IDE said" in capsys.readouterr().err
+
+
+def test_a_command_that_needs_an_answer_exits_one(watch, monkeypatch, capsys):
+    # The watcher sets error to the question itself (silent.Outcome), so the
+    # CLI must not print that long text twice.
+    watch.handlers["ping"] = lambda cmd, started: commands.new_result(
+        cmd, False, error="Confirm Import?", started_at=started,
         needs_input={"question": "Confirm Import?", "arg": "yes"})
     answering(watch, monkeypatch)
     assert cds_ide.main(["ping"]) == cds_ide.EXIT_FAILED
-    assert "--yes" in capsys.readouterr().err
+    printed = capsys.readouterr()
+    assert "--yes" in printed.err
+    assert (printed.out + printed.err).count("Confirm Import?") == 1
+
+
+# --- the flags the four real commands take ---------------------------------
+
+def parse(argv):
+    return cds_ide.command_args(cds_ide.build_parser().parse_args(argv))
+
+
+def test_export_passes_the_orphan_choice():
+    assert parse(["export", "--delete-orphans"]) == {"delete_orphans": True}
+
+
+def test_a_flag_left_out_arrives_as_not_said():
+    # None, not False: the watcher has to tell "leave them" from "did not say".
+    assert parse(["export"]) == {"delete_orphans": None}
+
+
+def test_import_carries_yes_and_force():
+    assert parse(["import", "--yes"]) == {"yes": True, "force": None}
+    assert parse(["import", "--yes", "--force"]) == {"yes": True, "force": True}
+
+
+def test_import_without_yes_leaves_the_watcher_to_ask():
+    assert parse(["import"]) == {"yes": None, "force": None}
+
+
+def test_build_carries_the_application_name():
+    assert parse(["build", "--app", "App_2"]) == {"app": "App_2"}
+
+
+def test_compare_takes_no_arguments_of_its_own():
+    assert parse(["compare"]) == {}
+
+
+def test_the_arguments_reach_the_watcher(watch, monkeypatch):
+    seen = {}
+
+    def record(cmd, started):
+        seen.update(cmd["args"])
+        return commands.new_result(cmd, True, started_at=started)
+
+    watch.handlers["export"] = record
+    answering(watch, monkeypatch)
+    cds_ide.main(["export", "--delete-orphans"])
+    assert seen == {"delete_orphans": True}
 
 
 # --- giving up -------------------------------------------------------------

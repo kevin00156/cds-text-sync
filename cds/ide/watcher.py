@@ -20,8 +20,21 @@ import sys
 import traceback
 
 from cds.core import commands, instances, ipc
+from cds.ide import silent
 
 POLL_MS = 50
+
+# The repo root, where the Project_*.py scripts live: cds/ide/watcher.py -> ../../
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+# Command -> the live script it presses, and the function that is its button.
+# These are the scripts in the repo root, not the cds.app stubs.
+SCRIPTS = {
+    "export": ("Project_export.py", "main"),
+    "import": ("Project_import.py", "main"),
+    "compare": ("Project_compare.py", "main"),
+    "build": ("Project_Build.py", "main"),
+}
 
 
 class Watcher(object):
@@ -45,6 +58,8 @@ class Watcher(object):
             "status": self._status,
             "stop": self._stop,
         }
+        for name in SCRIPTS:
+            self.handlers[name] = self._run_script
 
     # -- lifecycle ---------------------------------------------------------
 
@@ -91,6 +106,10 @@ class Watcher(object):
         self._beat(started, instances.STATE_BUSY)
         try:
             result = self._dispatch(cmd, started)
+        except silent.NeedsInput as need:  # a dialog outside a script run
+            result = commands.new_result(cmd, False, started_at=started,
+                                         error=need.question,
+                                         needs_input=need.as_record())
         except Exception:
             result = commands.new_result(cmd, False, started_at=started,
                                          error=traceback.format_exc())
@@ -133,6 +152,22 @@ class Watcher(object):
         self.running = False
         return commands.new_result(cmd, True, started_at=started,
                                    messages=[_info("stopping " + self.instance_id)])
+
+    def _run_script(self, cmd, started):
+        """Press the button on one of the live Project_*.py scripts.
+
+        The scripts report success and failure by popping dialogs, so the
+        stand-in UI's messages are the only verdict there is.
+        """
+        script, entry = SCRIPTS[cmd["command"]]
+        outcome = silent.run(self.ide, os.path.join(REPO_ROOT, script), entry,
+                             cmd.get("args") or {})
+        return commands.new_result(
+            cmd, outcome.ok(), started_at=started,
+            error=outcome.error_text(),
+            messages=outcome.messages,
+            stdout_tail=outcome.stdout_tail,
+            needs_input=None if outcome.needs is None else outcome.needs.as_record())
 
     # -- instance record ---------------------------------------------------
 

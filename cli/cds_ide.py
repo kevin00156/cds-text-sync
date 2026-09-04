@@ -8,6 +8,10 @@ it. CPython 3, standard library only.
     python cli/cds_ide.py list
     python cli/cds_ide.py ping [--target softplc]
     python cli/cds_ide.py status
+    python cli/cds_ide.py export [--delete-orphans]
+    python cli/cds_ide.py import --yes [--force]
+    python cli/cds_ide.py compare
+    python cli/cds_ide.py build [--app NAME]
     python cli/cds_ide.py stop
 
 Exit codes: 0 fine, 1 the command failed (needs_input counts), 2 no single
@@ -33,9 +37,24 @@ EXIT_TIMEOUT = 3
 DEFAULT_TIMEOUT_S = 120.0
 POLL_S = 0.05
 
-# Commands the watcher answers with no arguments of their own. Stage 2 adds
-# export/import/compare/build, which do take arguments.
-PLAIN_COMMANDS = ("ping", "status", "stop")
+_HELP = {
+    "ping": "check that an IDE is answering",
+    "status": "show what an IDE has open right now",
+    "export": "write the project out to the sync folder",
+    "import": "read the sync folder back into the project",
+    "compare": "report how the project and the sync folder differ",
+    "build": "build the application and report the error count",
+    "stop": "tell a watcher to shut down",
+}
+
+# Extra flags per command, and how they become the command's args. A flag left
+# out arrives as None so the watcher can tell "not said" from "said no".
+FLAGS = {
+    "export": [("--delete-orphans", "delete the sync files with no object behind them")],
+    "import": [("--yes", "confirm the import; without it the watcher asks"),
+               ("--force", "go ahead despite a version or computer mismatch")],
+    "build": [("--app", "which application to build, when there are several")],
+}
 
 
 def build_parser():
@@ -43,16 +62,22 @@ def build_parser():
         prog="cds_ide", description="Drive a running CODESYS IDE.")
     sub = parser.add_subparsers(dest="command", required=True)
     _add_shared(sub.add_parser("list", help="show the IDEs that are listening"))
-    for name in PLAIN_COMMANDS:
-        _add_target(sub.add_parser(name, help=_HELP[name]))
+    for name in ("ping", "status", "export", "import", "compare", "build", "stop"):
+        command = _add_target(sub.add_parser(name, help=_HELP[name]))
+        for flag, help_text in FLAGS.get(name, []):
+            if flag == "--app":
+                command.add_argument(flag, default=None, help=help_text)
+            else:
+                command.add_argument(flag, action="store_true", default=None,
+                                     help=help_text)
     return parser
 
 
-_HELP = {
-    "ping": "check that an IDE is answering",
-    "status": "show what an IDE has open right now",
-    "stop": "tell a watcher to shut down",
-}
+def command_args(ns):
+    """Turn the parsed flags back into the args the watcher reads."""
+    return dict((flag.lstrip("-").replace("-", "_"),
+                 getattr(ns, flag.lstrip("-").replace("-", "_")))
+                for flag, _ in FLAGS.get(ns.command, []))
 
 
 def _add_shared(parser):
@@ -125,7 +150,8 @@ def run_on_target(root, ns):
                                        busy_timeout=ns.timeout)
     except instances.TargetError as exc:
         return _report_target_error(exc)
-    result = send(root, reg["instance_id"], ns.command, {}, ns.timeout)
+    result = send(root, reg["instance_id"], ns.command, command_args(ns),
+                  ns.timeout)
     if result is None:
         print("timed out after %gs waiting for %s"
               % (ns.timeout, reg["instance_id"]), file=sys.stderr)
@@ -146,16 +172,24 @@ def _report(result, as_json):
     if as_json:
         print(json.dumps(result, indent=2, sort_keys=True))
         return EXIT_OK if result.get("ok") else EXIT_FAILED
+    said = []
     for message in result.get("messages") or []:
-        print("%s: %s" % (message.get("level", "info"), message.get("text", "")))
+        said.append(message.get("text", ""))
+        print("%s: %s" % (message.get("level", "info"), said[-1]))
     for key, value in sorted((result.get("data") or {}).items()):
         print("  %-16s %s" % (key, value))
     needs = result.get("needs_input")
     if needs:
+        said.append(needs.get("question"))
         print("needs input: %s (answer with --%s)"
-              % (needs.get("question"), needs.get("arg")), file=sys.stderr)
-    if result.get("error"):
+              % (said[-1], needs.get("arg")), file=sys.stderr)
+    # The error repeats the first bad message, or the question. Say it once.
+    if result.get("error") and result["error"] not in said:
         print("error: " + result["error"], file=sys.stderr)
+    if not result.get("ok") and result.get("stdout_tail"):
+        # A failure is the one time the script's own output is worth the room.
+        print("--- last output from the IDE ---", file=sys.stderr)
+        print(result["stdout_tail"], file=sys.stderr)
     return EXIT_OK if result.get("ok") else EXIT_FAILED
 
 
