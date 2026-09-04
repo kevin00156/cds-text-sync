@@ -67,17 +67,27 @@
 
 ## 4. 架構
 
-三個部分，各自一個檔案，各自不超過 300 行（硬上限 400，見 PRINCIPLES §2）。
+三個部分，每個檔案不超過 300 行（硬上限 400，見 PRINCIPLES §2）。
 
 ```
-cds/core/ipc.py        協定：目錄配置、實例登記、命令與結果的讀寫。純 Python，
-                       IronPython 2.7 與 CPython 3 都要能跑，pytest 全覆蓋。
+cds/core/ipc.py        目錄配置、實例編號、原子 JSON 讀寫。協定的地基。
+cds/core/instances.py  實例登記檔、心跳、判活、清理陳舊登記、目標解析。
+cds/core/commands.py   命令檔與結果檔的投遞與回收。
+                       這三支都是純 Python，IronPython 2.7 與 CPython 3 都要能跑，
+                       pytest 全覆蓋。
 cds/ide/watcher.py     看門人：主迴圈、silent UI 代理、呼叫四支腳本的入口函式。
                        唯一碰 system/projects 的新程式碼。
 Project_watch.py       薄入口，跟其他 Project_*.py 一樣出現在 Tools > Scripting > Scripts。
-cli/cds_ide.py         CPython 3 的 CLI，只依賴 cds.core.ipc。
-tests/test_ipc.py      協定的單元測試。
+cli/cds_ide.py         CPython 3 的 CLI，只依賴 cds/core 的那三支。
+tests/test_ipc.py      三支協定模組各自一個測試檔。
+tests/test_instances.py
+tests/test_commands.py
 ```
+
+協定原本規劃成單一檔案 `cds/core/ipc.py`，寫出來 402 行，超過 PRINCIPLES §2 的硬上限。
+拆成三支不是為了壓行數：目錄與檔案讀寫、誰還活著、命令怎麼交接，本來就是三件用「和」
+才描述得完的事，PRINCIPLES §1 要求拆開。三支模組名稱都不跟標準函式庫撞名，
+因為 IronPython 2.7 在沒有 `absolute_import` 時會先在套件內找同名模組。
 
 資料流：CLI 寫命令檔，看門人在下一次輪詢撿到、執行、寫結果檔並刪命令檔，CLI 讀到結果檔就刪掉它並回報。
 
@@ -120,7 +130,15 @@ instances\
 - 看門人每 2 秒重寫一次（心跳）。執行命令前把 `state` 改成 `busy` 並寫入 `busy_since`，做完改回 `idle`。
 - CLI 判定「活著」的規則：`state` 為 `idle` 且心跳在 10 秒內，或 `state` 為 `busy` 且 `busy_since` 在 CLI 的逾時範圍內。
 - **不要用 `os.kill(pid, 0)` 檢查程序**。CPython 在 Windows 上的 `os.kill` 會直接終止目標程序。要查程序存不存在就用 `ctypes` 的 `OpenProcess`，或乾脆只信心跳。
-- 看門人正常結束時刪掉自己的登記檔與子目錄。啟動時清掉同名專案的陳舊登記檔（心跳超過 60 秒）。
+- 看門人正常結束時刪掉自己的登記檔與子目錄。啟動時清掉陳舊的登記檔。
+- 實作補上兩個上面 JSON 沒列的欄位：`heartbeat_epoch` 與 `busy_since_epoch`，都是 epoch 秒的數字。
+  判活是拿時間相減，直接存數字就不必去解析本地時間字串，也避開日光節約時間那一小時的模糊地帶。
+  原本的 `heartbeat` 與 `busy_since` 字串保留，那是給打開檔案的人看的。
+- 「清掉陳舊登記檔」的條件比原本嚴一點：心跳超過 60 秒**而且**判活函式也認為它死了才清。
+  正在跑三分鐘匯入的看門人本來就發不出心跳，只看 60 秒會把活著實例的整個目錄刪掉。
+  判活對 `busy` 狀態是看 `busy_since` 有沒有超過命令逾時，所以忙碌中的實例不會被誤刪。
+- 寫檔的覆蓋動作：有 `os.replace` 就用它（CPython 3，覆蓋是原子的），沒有就退回「先刪目標再 rename」
+  （IronPython 2.7 走這條）。Windows 上 `os.rename` 碰到目標已存在會直接失敗，而登記檔每 2 秒覆寫同一個檔名。
 
 ### 5.3 命令檔與結果檔
 
@@ -227,10 +245,10 @@ python cli/cds_ide.py stop    [--target X]
 
 每階段獨立可跑、可測、可 commit。commit 訊息跟著 `main` 上的風格：一句祈使句，說明為什麼。
 
-- [ ] **階段 0：協定**
-  - [ ] `cds/core/ipc.py`：目錄配置、實例登記讀寫、心跳、命令與結果的原子讀寫、陳舊檔清理、目標解析。
-  - [ ] `tests/test_ipc.py`：原子寫入、排序、心跳判活、目標解析的四種情況、`.tmp` 忽略。CPython 3 下 `python -m pytest` 全綠。
-  - [ ] 驗收：測試綠。
+- [x] **階段 0：協定**
+  - [x] `cds/core/ipc.py`、`cds/core/instances.py`、`cds/core/commands.py`：目錄配置、實例登記讀寫、心跳、命令與結果的原子讀寫、陳舊檔清理、目標解析。
+  - [x] `tests/test_ipc.py`、`tests/test_instances.py`、`tests/test_commands.py`：原子寫入、排序、心跳判活、目標解析的四種情況、`.tmp` 忽略。CPython 3 下 `python -m pytest` 全綠。
+  - [x] 驗收：測試綠（187 個，其中 49 個是新增的）。
 - [ ] **階段 1：看門人只會 ping、status、stop**
   - [ ] 在 IDE 裡驗證 `import cds.core.ipc` 能過。不能就改成 `.pyw`，並回頭改階段 0。
   - [ ] `cds/ide/watcher.py` 主迴圈、心跳、`SilentSystem`（先只需要 `info/warning/error`）。
@@ -258,7 +276,9 @@ python cli/cds_ide.py stop    [--target X]
 
 ## 11. 未決事項（實作時決定，決定了寫回這裡）
 
-1. 協定模組放 `cds/core/ipc.py` 還是 `.pyw`：看階段 1 的 import 驗證。
+1. 協定模組放 `.py` 還是 `.pyw`：**還沒決定**，看階段 1 在 IDE 裡的 import 驗證。
+   階段 0 先照 `.py` 做，三支都在 `cds/core/`（見第 4 節的拆分說明）。三支都守 IronPython 2.7
+   相容規則，所以真要退回 `.pyw`，是搬檔案加載入器，不是重寫。
 2. `compare` 在 silent 模式要不要保留「互動式挑選」：預設不要，只回摘要。
 3. 心跳 2 秒、活著 10 秒、陳舊 60 秒這三個數字是起點，不是定案。
 4. `Project_Build.py` 與 `Project_export.py` 已超過 400 行的硬上限。這張工單不動它們，但不要再往裡面加東西。
