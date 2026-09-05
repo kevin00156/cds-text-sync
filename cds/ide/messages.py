@@ -20,6 +20,26 @@ BUILD_CATEGORY = "97F48D64-A2A3-4856-B640-75C046E37EA9"
 MAX_LINES = 200
 
 
+def note(ide_globals, text, ok=True):
+    """Leave a line in the IDE's Messages panel.
+
+    The status window says what is happening now; this is what happened
+    earlier, in a place the user can scroll back through. Never raises: a
+    watcher that cannot write a log line still has commands to answer, and
+    the fake `system` used by the tests has no write_message at all.
+    """
+    system = ide_globals.get("system")
+    severity = ide_globals.get("Severity")
+    if system is None or not hasattr(system, "write_message"):
+        return False
+    try:
+        level = severity.Information if ok else severity.Error
+        system.write_message(level, text)
+        return True
+    except Exception:
+        return False
+
+
 def build_report(ide_globals, limit=MAX_LINES):
     """The build's errors and warnings as text lines, errors first.
 

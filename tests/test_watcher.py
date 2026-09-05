@@ -518,3 +518,59 @@ def _fake_build(app_name):
         return commands.new_result(cmd, not error, started_at=started,
                                    error=error, messages=outcome.messages)
     return handler
+
+
+# --- feeding the status window ---------------------------------------------
+
+def test_a_command_paints_busy_before_it_starts_working(root):
+    # The IDE stops repainting for the whole of an export, so a BUSY drawn
+    # afterwards is a BUSY nobody ever saw.
+    watch = watcher.Watcher(make_globals(), root)
+    watch.start()
+    seen = []
+    watch.display_to = lambda picture: seen.append(picture["headline"])
+
+    def slow(cmd, started):
+        seen.append("...working...")
+        return commands.new_result(cmd, True, started_at=started)
+
+    watch.handlers["export"] = slow
+    run(watch, "export")
+    assert seen[0] == "BUSY: export"
+    assert seen[1] == "...working..."
+    assert seen[-1] == "LISTENING"
+
+
+def test_the_watcher_remembers_how_the_last_command_went(root):
+    watch = watcher.Watcher(make_globals(), root)
+    watch.start()
+    run(watch, "ping")
+    assert watch.done == 1
+    assert watch.last["command"] == "ping" and watch.last["ok"] is True
+    assert watch.doing is None
+
+
+def test_a_failed_command_is_remembered_as_failed(root):
+    watch = watcher.Watcher(make_globals(), root)
+    watch.start()
+    run(watch, "frobnicate")
+    assert watch.last["ok"] is False
+
+
+def test_a_window_that_throws_cannot_stop_the_watcher(root, capsys):
+    watch = watcher.Watcher(make_globals(), root)
+    watch.start()
+
+    def broken(_picture):
+        raise RuntimeError("the form is gone")
+
+    watch.display_to = broken
+    assert run(watch, "ping")["ok"] is True
+    assert "status window failed" in capsys.readouterr().out
+
+
+def test_nothing_is_pushed_when_there_is_no_window(root):
+    watch = watcher.Watcher(make_globals(), root)
+    watch.start()
+    assert watch.display_to is None
+    run(watch, "ping")  # must not raise

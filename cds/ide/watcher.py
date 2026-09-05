@@ -23,7 +23,7 @@ import sys
 import traceback
 
 from cds.core import commands, instances, ipc
-from cds.ide import messages, project, silent
+from cds.ide import display, messages, project, silent
 
 
 # The repo root, where the Project_*.py scripts live: cds/ide/watcher.py -> ../../
@@ -57,6 +57,12 @@ class Watcher(object):
             ipc.make_instance_id(path, os.getpid()), os.getpid(),
             project.ide_name(), path, watcher_version=version, now=now)
         self.instance_id = self.reg["instance_id"]
+        self.started_epoch = now
+        self.doing = None       # the command running right now, for the display
+        self.done = 0
+        self.last = None        # {"command", "ok", "elapsed"} of the last one
+        self.display_to = None  # set by session when there is a window to feed
+        self.form = None        # the window itself, so session can close it
         self._last_beat = 0.0
         self._deferring = False
         self.handlers = {
@@ -76,6 +82,7 @@ class Watcher(object):
         ipc.ensure_dirs(self.root, self.instance_id)
         commands.prune_results(self.root, self.instance_id)
         self._beat(ipc.now())
+        messages.note(self.ide, "cds-ide: listening as " + self.instance_id)
         print("watcher: listening as " + self.instance_id)
         print("watcher: " + ipc.instance_dir(self.root, self.instance_id))
 
@@ -108,6 +115,7 @@ class Watcher(object):
             if cmd is not None:
                 self.run_one(cmd)
             self.beat_if_due()
+            self._show()
         except SystemExit:
             raise
         except BaseException:
@@ -126,6 +134,7 @@ class Watcher(object):
             # prune_stale clears it — and raising here would bury whatever
             # actually stopped the loop.
             print("watcher: could not clear %s (%s)" % (self.instance_id, exc))
+        messages.note(self.ide, "cds-ide: stopped " + self.instance_id)
         print("watcher: stopped " + self.instance_id)
 
     # -- one command -------------------------------------------------------
@@ -145,6 +154,11 @@ class Watcher(object):
         try:
             commands.delete_command(self.root, self.instance_id, cmd["id"])
             self._beat(started, instances.STATE_BUSY)
+            self.doing = cmd.get("command")
+            # Paint BUSY before the work starts: the IDE stops repainting for
+            # the whole of an export, so afterwards is too late to say so.
+            self._show()
+            messages.note(self.ide, "cds-ide: %s started" % self.doing)
             result = self._answer(cmd, started)
             commands.write_result(self.root, self.instance_id, result)
             # A caller that gave up before we answered leaves its result
@@ -155,8 +169,35 @@ class Watcher(object):
             print("watcher: answering %s failed\n%s"
                   % (cmd.get("id"), traceback.format_exc()))
         finally:
+            self._finished(cmd, result, started)
             self._beat(ipc.now(), instances.STATE_IDLE)
+            self._show()
         return result
+
+    def _finished(self, cmd, result, started):
+        """Remember how that one went, for the status window and the log."""
+        self.doing = None
+        self.done += 1
+        ok = bool(result and result.get("ok"))
+        self.last = {"command": cmd.get("command"), "ok": ok,
+                     "elapsed": ipc.now() - started}
+        messages.note(self.ide, "cds-ide: %s %s in %.1fs"
+                      % (cmd.get("command"), "ok" if ok else "FAILED",
+                         self.last["elapsed"]),
+                      ok=ok)
+
+    def _show(self):
+        """Push the current picture at whatever is displaying it.
+
+        A window that throws is a cosmetic problem; it must not be able to
+        stop the watcher answering commands.
+        """
+        if self.display_to is None:
+            return
+        try:
+            self.display_to(display.describe(self))
+        except Exception:
+            print("watcher: status window failed\n" + traceback.format_exc())
 
     def _answer(self, cmd, started):
         """Turn one command into a result record, whatever it takes."""

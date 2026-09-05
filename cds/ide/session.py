@@ -43,8 +43,31 @@ def main(ide_globals, root=None, version=None, timer_factory=None):
     factory = timer_factory or _winforms_timer
     watcher.timer = factory(TICK_MS, _on_tick(watcher))
     setattr(sys, STATE_ATTR, watcher)
+    _show_status(watcher, ide_globals)
     print("watcher: run Project_watch.py again to stop it")
     return watcher
+
+
+def _show_status(watcher, ide_globals):
+    """Give the watcher a window, when there is a screen to put one on.
+
+    Headless runs get nothing: --noUI has no message loop to own the form,
+    and the acceptance runs must not change shape because of a window.
+    A window that will not open is not a reason to refuse to listen.
+    """
+    if not getattr(ide_globals.get("system"), "ui_present", False):
+        return None
+    try:
+        from cds.ide.statusform import StatusForm
+        form = StatusForm(lambda: stop(watcher)).show()
+    except Exception:
+        import traceback
+        print("watcher: no status window\n" + traceback.format_exc())
+        return None
+    watcher.form = form
+    watcher.display_to = form.update
+    watcher._show()
+    return form
 
 
 def stop(watcher):
@@ -53,6 +76,11 @@ def stop(watcher):
         watcher.timer.Stop()
         watcher.timer.Dispose()
         watcher.timer = None
+    form = getattr(watcher, "form", None)
+    if form is not None:
+        watcher.display_to = None
+        watcher.form = None
+        form.close()
     watcher.running = False
     watcher.shutdown()
     if current() is watcher:
