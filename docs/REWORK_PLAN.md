@@ -4,6 +4,18 @@
 > 「靈魂」，治好它唯一的病（慢），同時丟掉 2.x 疊上去的複雜度。
 > 實作規範見 [`PRINCIPLES.md`](../PRINCIPLES.md)。
 
+> **2026-09-05：階段 0 留下的 `cds/` 骨架已經移除。** `cds/app/`、`cds/core/` 的
+> cache、diff、model、patch、textfile，以及 `cds/ide/` 的 apply、snapshot、ui
+> 這 11 個檔案裡有 14 個 `NotImplementedError`，從建立到刪除之間沒有任何活著的
+> 程式碼 import 過它們。原因是後來的看門人與 CLI（見
+> [`WATCHER_CLI_PLAN.md`](WATCHER_CLI_PLAN.md)）直接建在活著的 `Project_*.py`
+> 上面——它「在 IDE 裡代替人按按鈕」，不重寫同步邏輯；而這份計畫最初的動機「慢」，
+> 已經由現有的 `sync_cache.json` 與 Merkle 跳過處理掉了。PRINCIPLES §7 說不留死碼。
+>
+> **這份文件本身留著。** 要重啟這條路線就從這裡重新開始，骨架用 git 歷史找得回來
+> （刪除前的最後一版在 `feat/ai-workflow` 上這段註記的那個 commit 的父節點）。
+> `cds/` 現在住的是協定與看門人，不是這份計畫描述的那套架構。
+
 ---
 
 ## 1. 診斷（為什麼這樣做）
