@@ -97,6 +97,7 @@ cds/ide/watcher.py     看門人每一拍做什麼：撿命令、執行、寫結
 cds/ide/session.py     把看門人裝進一個活著的 IDE 再拆下來：掛計時器、腳本返回、
                        狀態放 sys、停止。這一半全是 .NET 與 sys 狀態，測不到。
 cds/ide/silent.py      沒有人可以按對話框時，怎麼把 Project_*.py 跑完。
+cds/ide/messages.py    編譯完去 IDE 的訊息庫把錯誤與位置撈出來。
 cds/ide/project.py     問這個 IDE 現在開著什麼：專案路徑、同步資料夾、產品名稱。
 Project_watch.py       薄入口，跟其他 Project_*.py 一樣出現在 Tools > Scripting > Scripts。
 cli/cds_ide.py         CPython 3 的 CLI，只依賴 cds/core 的那三支。
@@ -326,9 +327,11 @@ python cli/cds_ide.py stop    [--target X]
   - [x] 驗收（2026-09-04 在無頭的 CODESYS 3.5.21.40 上自動跑完，用 `%TEMP%\cds-wtest\wtest.project` 這個臨時專案）：
         `export` 之後磁碟出現 `Sample.st`，內容正確；在磁碟新建 `Greeter.st` 之後 `compare` 回報「only on disk 1」；
         `import` 不帶 `--yes` 回 `needs_input`、exit code 1、沒有任何彈窗；`import --yes` 之後 `Greeter` 真的出現在 IDE 的物件樹裡。
-  - [ ] 驗收（還需要人）：`build` 回錯誤數。臨時專案是 `projects.create()` 建的空專案，沒有裝置也沒有 application，
-        `active_application` 直接丟 `ValueError`。看門人有正確接住並回報 traceback，但「回錯誤數」這條要有 application 的真專案才驗得到。
-  - [ ] 驗收（還需要人）：命令執行中 IDE 忙、結束後恢復。無頭實例沒有 UI，看不到。
+  - [x] 驗收：`build` 回錯誤數。2026-09-05 在兩個真專案的副本上跑完，見第 16 節：
+        正常 0 errors、故意放語法錯 1 error 且 exit code 1，錯誤訊息連物件與位置都回得來
+        （那份細節是這一輪新增 `cds/ide/messages.py` 才有的，見 16.3）。
+  - [ ] 驗收（還需要人）：命令執行中 IDE 忙、結束後恢復。無頭實例沒有 UI，看不到；
+        第 14.7 節的點擊儀器量的是「命令之間」可操作，「命令執行中不可操作」那半沒有單獨量過。
 - [x] **階段 3：收尾**
   - [x] CLI 逾時（exit code 3、順手把沒跑到的命令檔撤掉）、中途 Ctrl+C 不留殘檔、看門人重啟後清掉陳舊登記。
   - [x] 看門人每答完一個命令順手清一次結果目錄，不只在啟動時清。逾時的呼叫端會留下沒人收的結果檔，
@@ -624,3 +627,87 @@ reviewer 的「不改」八條照收。另外更正第 4 節的一句話：那�
 超過 PRINCIPLES §2 的 300 行軟目標、在 400 行硬上限內，這裡選擇不拆：
 剩下的候選接縫（stdout 攔截、對話框作答表）拆出來都只有四五十行，
 分開之後兩邊都還是得一起讀才看得懂那件事，不划算。
+
+---
+
+## 16. 真專案跑一輪（2026-09-05，用副本）
+
+依 `PHASE2_PLAN.md` 第 3 段。兩個真專案各複製一份到 `%TEMP%\cds-real\`，
+`cds-sync-folder` 指到副本旁邊的 `sync\`，原始檔與使用者 git 管理的
+`sunming_sliter_dev\codesys_export\` 一個位元組都沒有被寫過。
+使用者自己開著的那個 IDE 全程只被 `list` 讀到，沒有收過任何命令。
+
+啟動器是 `tools/open_copy_and_watch.py`（`--noUI --runscript`，加
+`CDS_OPEN_KEEPALIVE=1` 讓無頭行程不要在腳本返回後就退出）。
+
+### 16.1 數據
+
+兩個副本的物件數一樣（229），因為 softplc 是 Shm 專案的重構分支。
+
+| 步驟 | softplc 副本（CODESYS 3.5.21.40） | delta 副本（DIADesigner-AX 1.10） |
+|---|---|---|
+| `export`（全新） | 229 個物件，IDE 內 59.66 秒 | 229 個物件，IDE 內 56.60 秒 |
+| 磁碟上的 `.st` | 228 個 | 228 個 |
+| `compare`（改了一個 POU 之後） | 正確回報 M:1 =:228，50.58 秒 | 正確回報 M:1 =:228，47.12 秒 |
+| `import` 不帶 `--yes` | `needs_input`、exit 1、IDE 沒變 | 同左（softplc 上驗過即可） |
+| `import --yes` | 更新 1、相同 228，58.92 秒 | 更新 1、相同 228，約 65 秒 |
+| `build`（正常） | 0 errors、101 warnings、23.33 秒 | 0 errors、101 warnings、32.45 秒 |
+| `build`（故意放語法錯） | 1 error、90 warnings、9.62 秒、exit 1 | 未做（softplc 上驗過） |
+| 修好之後 `build` | 0 errors、101 warnings、10.12 秒 | — |
+| 兩邊同時 `export` | 兩邊都成功，`list` 兩邊同時 `busy`，總共 62 秒 | |
+
+改的物件是 `Application/Function Blocks/FB_LowPass.st`，加一個 `DINT` 區域變數
+與一行 `_diCallCount := _diCallCount + 1;`。語法錯是把那行的 `1` 拿掉。
+
+`stop` 之後兩個實例的登記檔與目錄都消失，IDE 程序自己退出，`list` 只剩使用者那一個。
+
+### 16.2 跳出來的對話框，以及怎麼接住的
+
+**`UpgradeProjectConfirmation`（Delta 1.10）。** delta 副本是 DIADesigner-AX 1.8 建的，
+1.10 開它會問「要不要升級儲存格式」。無頭模式的預設答案是「不要」，而「不要」的意思是
+**不開了**，`projects.open()` 直接丟 `Do not upgrade the older version project`。
+
+一開始以為這是 `projects.open()` 的 `update_flags` 參數管的，試了 `SilentMode|UpdateAll`、
+`UpdateAll`、`NoUpdates` 全都一樣被擋。它不是更新旗標，是一個提示。
+把 `system.prompt_handling` 設成 `LogMessageKeys | LogSimplePrompts | ProcessScriptPrompts`
+之後，訊息鍵就印在 stderr 上了，然後
+`system.prompt_answers["UpgradeProjectConfirmation"] = PromptResult.Yes` 就過了。
+這套作法寫在 `tools/watch_harness.py` 的 `answer_prompts()`，`LogMessageKeys` 保持開著，
+所以下一個沒被預先回答的提示會自己把鍵名印出來，不必再猜一次。
+
+**升級之後 `save()` 丟 `NullReferenceException`（Delta 1.10）。** 存檔失敗，
+換成 `projects.primary` 重新拿 handle 也一樣。`cds-sync-folder` 屬性在記憶體裡已經設好，
+看門人讀的就是記憶體裡那份，所以存檔失敗不影響這一輪。啟動器改成存檔失敗只印一行繼續
+（`watch_harness.try_save()`）。**這件事沒有查到根因**，只知道是 Delta 1.10 無頭、
+專案剛升級過這個組合。CODESYS 3.5.21.40 沒有這個問題，而且 Delta 上的
+`export`、`import`、`build` 後續全部正常——那些腳本內部也會呼叫 `save()`，卻沒有出事，
+所以問題應該只出在升級後的第一次存檔。
+
+`--yes`、`--force`、`--app`、`--delete-orphans` 這一輪都沒有被觸發到需要 `--force` 的情況：
+兩個副本的同步資料夾都是這一輪自己匯出的，版本與電腦名稱都相符。
+
+### 16.3 這一輪改掉的工具問題
+
+**`build` 只回錯誤數，不回錯誤在哪。** `Project_Build.py` 把逐條錯誤整理成一張表，
+但只有在專案開了 `cds-sync-debug` 屬性時才寫進 `build_<App>.log`，平常只印
+「1 errors, 90 warnings」。對看不到 IDE 的呼叫端來說，知道有錯卻不知道錯在哪，
+等於沒辦法修——而 `docs/AI_WORKFLOW.md` 已經告訴 agent「錯誤的詳細內容在 `stdout_tail` 裡」。
+
+新增 `cds/ide/messages.py`：編譯完直接去 IDE 自己的訊息庫讀
+（`system.get_message_objects(BUILD_CATEGORY, Severity.Error|Warning|FatalError)`），
+格式化成 `severity  text  (物件, 位置)` 接在 `stdout_tail` 後面，錯誤排在警告前面，
+上限 200 行。不動 `Project_Build.py`。實測輸出：
+
+```
+error    Expression expected instead of ';'  (FB_LowPass, at 5)
+warning  The code 'GVL_AO.iAO[1];' has no effect. Is this the intent?  (AIO_2, at 4819)
+```
+
+`IScriptMessage` 的成員名稱在不同 ScriptEngine 版本可能不一樣，所以格式化整段寫得保守：
+拿不到就退回 `str()`，整組拿不到就回空清單，絕不因為「錯誤格式化失敗」而讓一次編譯報不出來。
+
+### 16.4 不屬於工具範圍、只記錄的
+
+softplc 與 delta 兩個副本正常編譯都是 **101 個警告**，其中大量是
+`The code 'GVL_AO.iAO[n];' has no effect. Is this the intent?`（`AIO_2` 裡）。
+這是專案本身的程式碼，不是同步工具造成的，這次沒有動它。
