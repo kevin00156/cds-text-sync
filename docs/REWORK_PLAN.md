@@ -11,6 +11,9 @@
 > [`WATCHER_CLI_PLAN.md`](WATCHER_CLI_PLAN.md)）直接建在活著的 `Project_*.py`
 > 上面——它「在 IDE 裡代替人按按鈕」，不重寫同步邏輯；而這份計畫最初的動機「慢」，
 > 已經由現有的 `sync_cache.json` 與 Merkle 跳過處理掉了。PRINCIPLES §7 說不留死碼。
+> 同一天稍後 `cds/settings.py` 與 `cds/types.py` 也一起刪掉了，理由相同：骨架走了之後，
+> 除了它們各自的測試以外沒有任何人 import。所以本文第 6.5 節提到的 `cds/settings.py`
+> 是當時的規劃，不是現在的程式碼——那份 metadata 政策實際上住在 `codesys_utils.pyw` 裡。
 >
 > **這份文件本身留著。** 要重啟這條路線就從這裡重新開始，骨架用 git 歷史找得回來
 > （刪除前的最後一版在 `feat/ai-workflow` 上這段註記的那個 commit 的父節點）。

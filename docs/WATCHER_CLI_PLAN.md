@@ -4,6 +4,11 @@
 > 背景研究與實測數據見 [`RESEARCH_HTTP_IDE_CONTROL.md`](RESEARCH_HTTP_IDE_CONTROL.md)，
 > 尤其是 3.1、3.2、3.2.1 與 3.4 節。程式規範見 [`PRINCIPLES.md`](../PRINCIPLES.md)。
 > 這份工單是給接手的人（或 agent）看的，讀完應該不用再翻對話紀錄。
+>
+> 這件事做完之後還有兩段工作，計畫書收在 [`history/`](history/)：
+> [`PHASE2_PLAN.md`](history/PHASE2_PLAN.md)（審查合併、給 AI 用、真專案跑一輪）與
+> [`PHASE3_PLAN.md`](history/PHASE3_PLAN.md)（看門人的狀態視窗、清掉被繞過的骨架）。
+> 它們都已經執行完畢，留著是為了說明當時的取捨。
 
 ---
 
@@ -61,7 +66,10 @@
 7. IronPython 2.7 的內建 `open()` 讀出來是位元組，不接受 `encoding=` 參數。讀寫 UTF-8 一律用 `io.open(path, encoding="utf-8-sig")` 或 `codecs.open`。這是 commit `82d9904` 付過學費的事。
 8. ~~`cds/` 從來沒有在 IDE 裡被 import 過。~~ **2026-09-04 已驗證可以。** 把 repo 根目錄加進 `sys.path` 之後，
    `from cds.core import commands, instances, ipc` 在三個 IDE 都成功，而且完整跑完一輪
-   「寫命令、讀命令、寫結果、收結果、解析目標」。驗證腳本是 [`tools/probe_cds_import.py`](../tools/probe_cds_import.py)：
+   「寫命令、讀命令、寫結果、收結果、解析目標」。驗證腳本 `tools/probe_cds_import.py` 已移除
+   （一次性的驗證，結論就是下面這張表）。當時的做法是：把 repo 根目錄 insert 進 `sys.path`，
+   `from cds.core import commands, instances, ipc`，在 `%TEMP%` 開一個暫存目錄跑完整一輪協定往返，
+   結果寫進腳本旁邊的 log 並在有 UI 時彈一次 `system.ui.info`。
 
    | IDE | IronPython | ScriptEngine | 結果 |
    |---|---|---|---|
@@ -374,7 +382,11 @@ python cli/cds_ide.py stop    [--target X]
   `PLC Designer V3.24.0`、`DIADesigner-AX 1.10`。腳本的 `print` 會進 stdout，抓得到。
   無頭實例沒有專案也沒有 UI，所以這條路驗得了模組載入與純 Python 邏輯，驗不了
   「使用者正在操作 IDE 時看門人卡不卡」——那個仍然只能手測。
-- 看門人與 CLI 的整合只能手測。每次手測前先用 `tools/probe_ui_responsive.py` 確認那台 IDE 在 `system.delay()` 下可操作，這支腳本從 Tools > Scripting > Execute Script File 執行，45 秒內試著點選單。
+- 看門人與 CLI 的整合只能手測。~~每次手測前先用 `tools/probe_ui_responsive.py` 確認那台 IDE 在
+  `system.delay()` 下可操作。~~ **那支腳本已移除**，因為它量的是第 14 節作廢掉的設計：它在主執行緒上
+  用 `system.delay(50)` 迴圈 45 秒，讓人在旁邊試著點選單，而後來證明那個迴圈期間本來就點不動，
+  所以它只會給出誤導的結論。現在要量 IDE 點不點得動，用 `tools/probe_click_menu.py`，
+  它從外面送真實的滑鼠事件，不需要在 IDE 裡跑任何東西。
 - **這個 worktree 沒有掛進任何 IDE 的 ScriptDir**（`%LOCALAPPDATA%\CODESYS\ScriptDir\cds-text-sync` 指的是隔壁的主 repo），
   所以 worktree 裡的腳本不會出現在 Tools > Scripting 的清單裡。手測時要嘛用 Execute Script File 指絕對路徑，
   要嘛另外開一個 junction 指向這個 worktree。
