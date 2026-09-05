@@ -3,14 +3,15 @@
 
 For the real-input acceptance in WATCHER_CLI_PLAN.md 14.5. Start an IDE with
 
-    <exe> --profile="<name>" --runscript="<this file>"
+    <exe> --profile="<name>" --culture=en --runscript="<this file>"
 
 and it builds a scratch project, points cds-sync-folder at a sync folder
 beside it, arms the watcher exactly the way Project_watch.py does, and
 returns. Once it has returned the IDE belongs to the user again, which is the
 thing being measured: clicking File must open its menu on every attempt.
 
-Run it a second time in the same IDE and it stops the watcher instead.
+To drive an existing project instead, use tools/open_copy_and_watch.py.
+Run either a second time in the same IDE and it stops the watcher.
 
 Environment:
     CDS_PROBE_DIR        where to build (default %TEMP%\\cds-watcher-probe)
@@ -25,7 +26,10 @@ import sys
 import tempfile
 import traceback
 
-REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+import watch_harness
+
 PROBE_DIR = os.environ.get("CDS_PROBE_DIR",
                            os.path.join(tempfile.gettempdir(),
                                         "cds-watcher-probe"))
@@ -38,15 +42,12 @@ PROJECT_PATH = os.path.join(PROBE_DIR, os.path.basename(PROBE_DIR) + ".project")
 
 def open_or_create():
     """The scratch project, with cds-sync-folder pointing beside it."""
-    for directory in (PROBE_DIR, SYNC_DIR):
-        if not os.path.isdir(directory):
-            os.makedirs(directory)
+    watch_harness.ensure_dirs(PROBE_DIR, SYNC_DIR)
     if os.path.exists(PROJECT_PATH):
         project = projects.open(PROJECT_PATH)
     else:
         project = projects.create(PROJECT_PATH)
-    info = project.get_project_info()
-    (info.values if hasattr(info, "values") else info)["cds-sync-folder"] = SYNC_DIR
+    watch_harness.point_sync_folder(project, SYNC_DIR)
     return project
 
 
@@ -73,34 +74,15 @@ def fill(project):
     return made
 
 
-def park():
-    """Headless only: keep the process alive so the timer has somewhere to tick.
-
-    system.delay() pumps posted messages, and a WinForms timer tick is one, so
-    the watcher still runs. With a UI this would be exactly the bug we fixed.
-    """
-    print("probe: parked (CDS_PROBE_KEEPALIVE=1); no UI is usable while this runs")
-    while session.current() is not None:
-        system.delay(200)
-    print("probe: watcher stopped, unparking")
-
-
 print("probe: project  " + PROJECT_PATH)
 print("probe: sync dir " + SYNC_DIR)
 
-sys.path.insert(0, REPO_ROOT)
-from cds.ide import session
-
-if session.current() is not None:
-    session.main(globals())          # second run in this IDE: stop
-    print("probe: stopped the watcher")
+if watch_harness.session.current() is not None:
+    watch_harness.arm(globals())          # second run in this IDE: stop
 else:
-    project = open_or_create()
-    print("probe: created %d POU(s)" % fill(project))
-    started = session.main(globals(), version=session.script_version())
-    print("probe: armed as " + started.instance_id)
-    if KEEPALIVE:
-        try:
-            park()
-        except Exception:
-            print(traceback.format_exc())
+    try:
+        print("probe: created %d POU(s)" % fill(open_or_create()))
+    except Exception:
+        print(traceback.format_exc())
+    if watch_harness.arm(globals()) is not None and KEEPALIVE:
+        watch_harness.park(globals())

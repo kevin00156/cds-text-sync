@@ -23,7 +23,7 @@ import sys
 import traceback
 
 from cds.core import commands, instances, ipc
-from cds.ide import project, silent
+from cds.ide import messages, project, silent
 
 
 # The repo root, where the Project_*.py scripts live: cds/ide/watcher.py -> ../../
@@ -216,8 +216,23 @@ class Watcher(object):
             cmd, not error, started_at=started,
             error=error,
             messages=outcome.messages,
-            stdout_tail=outcome.stdout_tail,
+            stdout_tail=self._tail(cmd, outcome),
             needs_input=None if outcome.needs is None else outcome.needs.as_record())
+
+    def _tail(self, cmd, outcome):
+        """What the script printed, plus what the IDE has to say about it.
+
+        Project_Build.py only reports counts; the errors themselves — object
+        and line — live in the IDE's message store, and a caller that cannot
+        see the IDE has no other way to reach them.
+        """
+        if cmd["command"] != "build":
+            return outcome.stdout_tail
+        report = messages.build_report(self.ide)
+        if not report:
+            return outcome.stdout_tail
+        return "\n".join([outcome.stdout_tail, "--- build messages ---"] +
+                         report)
 
     # -- instance record ---------------------------------------------------
 
