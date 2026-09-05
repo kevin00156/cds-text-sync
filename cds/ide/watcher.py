@@ -23,7 +23,7 @@ import sys
 import traceback
 
 from cds.core import commands, instances, ipc
-from cds.ide import silent
+from cds.ide import project, silent
 
 
 # The repo root, where the Project_*.py scripts live: cds/ide/watcher.py -> ../../
@@ -43,8 +43,10 @@ class Watcher(object):
     """One IDE's listener: on every tick, claim a command, answer it, beat."""
 
     def __init__(self, ide_globals, root=None, version=None):
+        if "system" not in ide_globals:
+            raise KeyError("the watcher needs the IDE's globals, and this "
+                           "mapping has no `system` in it")
         self.ide = ide_globals
-        self.system = ide_globals["system"]
         self.root = root or ipc.default_root()
         self.running = True
         self.busy = False
@@ -53,8 +55,7 @@ class Watcher(object):
         path = self._open_project_path()
         self.reg = instances.new_registration(
             ipc.make_instance_id(path, os.getpid()), os.getpid(),
-            sys.version.replace("\n", " "), path,
-            watcher_version=version, now=now)
+            project.ide_name(), path, watcher_version=version, now=now)
         self.instance_id = self.reg["instance_id"]
         self._last_beat = 0.0
         self._deferring = False
@@ -94,10 +95,12 @@ class Watcher(object):
         thread-exception dialog that can take the IDE down. Returns whether a
         turn actually happened.
         """
-        if not self.running or self.busy:
+        if not self.running or self.busy or silent.running():
             # Not running: the teardown belongs to whoever armed us. Busy: a
-            # command is pumping messages of its own and the timer fired again
-            # on top of it. One command at a time.
+            # command is pumping messages of its own and the timer fired
+            # again on top of it. silent.running(): some other caller has a
+            # script going — this one is belt-and-braces, self.busy already
+            # covers our own commands.
             return False
         self.busy = True
         try:
@@ -128,26 +131,44 @@ class Watcher(object):
     # -- one command -------------------------------------------------------
 
     def run_one(self, cmd):
-        """Claim, run, and answer a single command. Never raises."""
+        """Claim, run, and answer a single command. Never raises.
+
+        Answering is inside the try as well: writing the result can hit the
+        same Windows sharing violation as the heartbeat (section 12), and an
+        instance left stuck in `busy` is worse than a lost answer. Once
+        busy_since goes stale the CLI stops seeing the instance, while
+        prune_stale keeps sparing it because the heartbeat is fresh — nothing
+        recovers from that but restarting the script by hand.
+        """
         started = ipc.now()
-        commands.delete_command(self.root, self.instance_id, cmd["id"])
-        self._beat(started, instances.STATE_BUSY)
+        result = None
         try:
-            result = self._dispatch(cmd, started)
-        except silent.NeedsInput as need:  # a dialog outside a script run
-            result = commands.new_result(cmd, False, started_at=started,
-                                         error=need.question,
-                                         needs_input=need.as_record())
+            commands.delete_command(self.root, self.instance_id, cmd["id"])
+            self._beat(started, instances.STATE_BUSY)
+            result = self._answer(cmd, started)
+            commands.write_result(self.root, self.instance_id, result)
+            # A caller that gave up before we answered leaves its result
+            # behind. Sweeping here keeps the directory bounded on a watcher
+            # that runs for days; what we just wrote is far too young to catch.
+            commands.prune_results(self.root, self.instance_id)
         except Exception:
-            result = commands.new_result(cmd, False, started_at=started,
-                                         error=traceback.format_exc())
-        commands.write_result(self.root, self.instance_id, result)
-        # A caller that gave up before we answered leaves its result behind.
-        # Sweeping here keeps the directory bounded on a watcher that runs for
-        # days; the result just written is far too young to be caught.
-        commands.prune_results(self.root, self.instance_id)
-        self._beat(ipc.now(), instances.STATE_IDLE)
+            print("watcher: answering %s failed\n%s"
+                  % (cmd.get("id"), traceback.format_exc()))
+        finally:
+            self._beat(ipc.now(), instances.STATE_IDLE)
         return result
+
+    def _answer(self, cmd, started):
+        """Turn one command into a result record, whatever it takes."""
+        try:
+            return self._dispatch(cmd, started)
+        except silent.NeedsInput as need:  # a dialog outside a script run
+            return commands.new_result(cmd, False, started_at=started,
+                                       error=need.question,
+                                       needs_input=need.as_record())
+        except Exception:
+            return commands.new_result(cmd, False, started_at=started,
+                                       error=traceback.format_exc())
 
     def _dispatch(self, cmd, started):
         handler = self.handlers.get(cmd.get("command"))
@@ -166,13 +187,8 @@ class Watcher(object):
                                    messages=[_info("pong from " + self.instance_id)])
 
     def _status(self, cmd, started):
-        """Hand back the instance record with the open project re-read.
-
-        A project can be closed and another opened without restarting the
-        watcher, so do not trust what __init__ saw. The instance id keeps the
-        project it was born with — it names a directory that already exists.
-        """
-        live = instances.set_project(dict(self.reg), self._open_project_path())
+        """Hand back the instance record. The heartbeat keeps it current."""
+        live = dict(self.reg)
         # Answering this is what makes us busy, so reporting "busy" would say
         # nothing. Report the state we go back to; `list` shows the live one.
         instances.set_state(live, instances.STATE_IDLE, started)
@@ -192,11 +208,13 @@ class Watcher(object):
         stand-in UI's messages are the only verdict there is.
         """
         script, entry = SCRIPTS[cmd["command"]]
+        args = cmd.get("args") or {}
         outcome = silent.run(self.ide, os.path.join(REPO_ROOT, script), entry,
-                             cmd.get("args") or {})
+                             args)
+        error = outcome.error_text() or _wrong_application(cmd, args, outcome)
         return commands.new_result(
-            cmd, outcome.ok(), started_at=started,
-            error=outcome.error_text(),
+            cmd, not error, started_at=started,
+            error=error,
             messages=outcome.messages,
             stdout_tail=outcome.stdout_tail,
             needs_input=None if outcome.needs is None else outcome.needs.as_record())
@@ -204,10 +222,18 @@ class Watcher(object):
     # -- instance record ---------------------------------------------------
 
     def _open_project_path(self):
-        """The primary project's path, or None when no project is open."""
-        primary = getattr(self.ide.get("projects"), "primary", None)
-        path = getattr(primary, "path", None)
-        return None if path is None else str(path)
+        return project.path_of(self.ide.get("projects"))
+
+    def _refresh_project(self):
+        """Follow the project the IDE has open now, not the one it had at start.
+
+        Closing a project and opening another does not restart the watcher,
+        and `list` is how a caller picks its target, so a stale name here
+        means it picks the wrong IDE or none at all. instance_id keeps its
+        birth name — that one is a directory.
+        """
+        instances.set_project(self.reg, self._open_project_path())
+        self.reg["sync_dir"] = project.sync_dir(self.ide.get("projects"))
 
     def beat_if_due(self, now=None):
         """Write the heartbeat, but only every HEARTBEAT_INTERVAL_S."""
@@ -227,6 +253,7 @@ class Watcher(object):
         """
         if state is not None:
             instances.set_state(self.reg, state, now)
+        self._refresh_project()
         instances.stamp_heartbeat(self.reg, now)
         try:
             instances.write(self.root, self.reg)
@@ -242,3 +269,24 @@ class Watcher(object):
 
 def _info(text):
     return {"level": "info", "text": text}
+
+
+def _wrong_application(cmd, args, outcome):
+    """Did build compile the application the caller asked for?
+
+    Project_Build.py only offers the chooser when the project property
+    cds-text-sync-multipleApps is already true, and it refreshes that flag
+    *after* choosing. So the first build after a second application appears
+    skips the chooser entirely, compiles the active one and reports success —
+    with --app silently doing nothing. Check the name it reports instead.
+    """
+    wanted = args.get("app")
+    if cmd.get("command") != "build" or not wanted:
+        return None
+    for message in outcome.messages:
+        if wanted in message["text"]:
+            return None
+    return ("build did not use --app %r; the project's multiple-application "
+            "flag is probably not set yet, so it built the active application "
+            "instead. Run build again, or export once to refresh the flag."
+            % (wanted,))

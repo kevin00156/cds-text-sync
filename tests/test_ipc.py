@@ -104,3 +104,31 @@ def test_now_takes_the_pinned_value():
 def test_iso_is_a_readable_stamp():
     assert ipc.iso(1725453665.0).startswith("20")
     assert "T" in ipc.iso(1725453665.0)
+
+
+# --- the branches only IronPython 2.7 takes --------------------------------
+
+def test_the_rename_fallback_works_without_os_replace(tmp_path, monkeypatch):
+    # IronPython 2.7 has no os.replace, and os.rename cannot overwrite on
+    # Windows, so this is the path the IDE actually runs. CPython never takes
+    # it, which is why it needs pinning here.
+    monkeypatch.delattr(os, "replace", raising=False)
+    path = str(tmp_path / "reg.json")
+    ipc.write_json(path, {"beat": 1})
+    ipc.write_json(path, {"beat": 2})
+    assert ipc.read_json(path) == {"beat": 2}
+    assert not os.path.exists(path + ".tmp")
+
+
+def test_a_bytes_payload_from_json_dumps_is_decoded(tmp_path, monkeypatch):
+    # IronPython 2.7's json.dumps hands back bytes; io.open in text mode will
+    # not take those.
+    real_dumps = ipc.json.dumps
+
+    def bytes_dumps(*args, **kwargs):
+        return real_dumps(*args, **kwargs).encode("utf-8")
+
+    monkeypatch.setattr(ipc.json, "dumps", bytes_dumps)
+    path = str(tmp_path / "reg.json")
+    ipc.write_json(path, {"a": 1})
+    assert ipc.read_json(path) == {"a": 1}

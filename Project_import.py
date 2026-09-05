@@ -78,7 +78,9 @@ def import_project(projects_obj=None):
         
         from codesys_ui import ask_yes_no
         if not ask_yes_no("Version Mismatch Warning", msg):
-            print("Import cancelled due to version mismatch.")
+            # Warn, do not just print: a caller driving this headlessly reads
+            # system.ui as its only success/failure signal.
+            system.ui.warning("Import cancelled due to version mismatch.")
             return
     
     # A live PLC login makes every create/move/delete fail inside the IDE, so
@@ -170,7 +172,7 @@ def import_project(projects_obj=None):
     if remap_lines:
         confirm_msg += "\n\n[!] Device remap (export -> IDE):\n  " + "\n  ".join(remap_lines)
     if not ask_yes_no("Confirm Import", confirm_msg):
-        print("Import cancelled by user.")
+        system.ui.warning("Import cancelled: not confirmed.")
         return
         
     # ── Create timestamped safety backup if enabled ──

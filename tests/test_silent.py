@@ -6,6 +6,10 @@ real Project_*.py: they reach for `system` from their own globals, and they
 reach for ask_yes_no through sys.modules["codesys_ui"] at call time. Running
 the real ones needs a real IDE, which is the hand test in the plan.
 """
+import codecs
+import io
+import os
+import re
 import sys
 import types
 
@@ -265,3 +269,96 @@ def test_plain_information_is_success(tmp_path, ide):
     path = write_script(tmp_path, u"    system.ui.info('Export complete!')")
     outcome = silent.run(ide, path, "main", {})
     assert outcome.ok() and outcome.error_text() is None
+
+
+# --- a script that gives up quietly ----------------------------------------
+
+def test_a_script_that_reports_nothing_is_a_failure(tmp_path, ide):
+    # Project_import.py used to have two give-up paths that only print(), so
+    # a cancelled import came back ok=True and the caller went on to build
+    # code that was never imported.
+    path = write_script(tmp_path, u"    print('Import cancelled.')")
+    outcome = silent.run(ide, path, "main", {})
+    assert not outcome.ok()
+    assert "without reporting anything" in outcome.error_text()
+    assert outcome.stdout_tail == "Import cancelled."
+
+
+def test_one_info_is_enough_to_count_as_finished(tmp_path, ide):
+    path = write_script(tmp_path, u"    system.ui.info('Export complete!')")
+    assert silent.run(ide, path, "main", {}).ok()
+
+
+# --- the dialog titles are copies of literals in four other files ----------
+
+DRIVEN_FILES = (
+    # What the four commands actually execute. Project_directory.py is left
+    # out on purpose: its dialog is only reachable after "Computer Mismatch"
+    # is answered yes, and silent mode never answers yes.
+    "Project_export.py", "Project_import.py", "Project_compare.py",
+    "Project_Build.py", "codesys_utils.pyw", "codesys_managers.pyw",
+    "codesys_compare_engine.pyw", "codesys_online.pyw",
+)
+
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def titles_asked_for(function):
+    """Every literal title passed to `function` anywhere the commands reach."""
+    pattern = re.compile(function + r'\(\s*"([^"]+)"')
+    found = set()
+    for name in DRIVEN_FILES:
+        with io.open(os.path.join(REPO_ROOT, name), encoding="utf-8") as handle:
+            found.update(pattern.findall(handle.read()))
+    return found
+
+
+def test_every_yes_no_dialog_has_an_answer():
+    # Nothing else keeps these two in step. Rename a title in one of those
+    # files and export or import starts failing with "unexpected dialog",
+    # while every test here stays green because they use stand-in scripts.
+    assert titles_asked_for("ask_yes_no") <= set(silent.YES_NO)
+
+
+def test_every_yes_no_cancel_dialog_has_an_answer():
+    assert titles_asked_for("ask_yes_no_cancel") <= set(silent.YES_NO_CANCEL)
+
+
+def test_the_answer_tables_are_not_carrying_dead_titles():
+    assert set(silent.YES_NO) == titles_asked_for("ask_yes_no")
+    assert set(silent.YES_NO_CANCEL) == titles_asked_for("ask_yes_no_cancel")
+
+
+def test_an_unknown_yes_no_cancel_dialog_is_refused(tmp_path, ide,
+                                                    fake_codesys_ui):
+    body = (u"    from codesys_ui import ask_yes_no_cancel\n"
+            u"    ask_yes_no_cancel('Brand New Question', 'm')")
+    outcome = silent.run(ide, write_script(tmp_path, body), "main", {})
+    assert "Brand New Question" in outcome.needs.question
+
+
+# --- the exec path ---------------------------------------------------------
+
+def test_a_script_saved_with_a_bom_still_compiles(tmp_path, ide):
+    # Python 2's compile() chokes on a BOM, and Windows editors add them.
+    path = tmp_path / "Project_bom.py"
+    body = (u"# -*- coding: utf-8 -*-\n"
+            u"def main():\n"
+            u"    system.ui.info('past the bom')\n")
+    path.write_bytes(codecs.BOM_UTF8 + body.encode("utf-8"))
+    outcome = silent.run(ide, str(path), "main", {})
+    assert outcome.messages[0]["text"] == "past the bom"
+
+
+def test_nothing_is_running_before_or_after_a_run(tmp_path, ide):
+    assert silent.running() is False
+    path = write_script(tmp_path, u"    system.ui.info(str(1))")
+    silent.run(ide, path, "main", {})
+    assert silent.running() is False
+
+
+def test_the_running_flag_is_up_inside_the_script(tmp_path, ide):
+    path = write_script(tmp_path,
+                        u"    import cds.ide.silent as s\n"
+                        u"    system.ui.info(str(s.running()))")
+    assert silent.run(ide, path, "main", {}).messages[0]["text"] == "True"

@@ -8,6 +8,7 @@ What this cannot show is whether the real IDE is clickable while the watcher
 runs — that needs real mouse input (WATCHER_CLI_PLAN.md 14.5).
 """
 import os
+import sys
 
 import pytest
 
@@ -22,9 +23,20 @@ class FakeSystem(object):
         pass
 
 
+class FakeProjectInfo(object):
+    """Shaped like CODESYS's project info: a .values mapping of properties."""
+
+    def __init__(self, values):
+        self.values = values
+
+
 class FakeProject(object):
     def __init__(self, path):
         self.path = path
+        self.props = {}
+
+    def get_project_info(self):
+        return FakeProjectInfo(self.props)
 
 
 class FakeProjects(object):
@@ -388,3 +400,121 @@ def test_the_stop_command_tears_down_on_the_following_tick(root):
     assert timers[0].started is False and timers[0].disposed is True
     assert instances.read(root, watch.instance_id) is None
     assert session.current() is None
+
+
+# --- staying answerable when writing the answer fails ----------------------
+
+def test_a_failure_after_the_command_still_puts_the_state_back(root,
+                                                               monkeypatch):
+    # Stuck in busy is worse than a lost answer: once busy_since goes stale
+    # the CLI stops seeing the instance, and prune_stale keeps sparing it
+    # because the heartbeat is fresh. Nothing recovers from that on its own.
+    watch = watcher.Watcher(make_globals(), root)
+    watch.start()
+
+    def boom(*args, **kwargs):
+        raise OSError(13, "used by another process")
+
+    monkeypatch.setattr(commands, "write_result", boom)
+    cmd = commands.write_command(root, watch.instance_id, "ping")
+    watch.run_one(commands.next_command(root, watch.instance_id))
+    assert instances.read(root, watch.instance_id)["state"] == \
+        instances.STATE_IDLE
+    assert watch.tick() is True  # and the watcher is still in service
+    assert cmd["id"]
+
+
+def test_a_command_is_still_claimed_when_answering_fails(root, monkeypatch):
+    watch = watcher.Watcher(make_globals(), root)
+    watch.start()
+    monkeypatch.setattr(commands, "prune_results",
+                        lambda *a, **k: 1 / 0)
+    commands.write_command(root, watch.instance_id, "ping")
+    watch.run_one(commands.next_command(root, watch.instance_id))
+    assert commands.list_command_ids(root, watch.instance_id) == []
+
+
+# --- following the project the IDE has open now ----------------------------
+
+def test_the_registration_follows_a_project_swap(root):
+    # `list` is how a caller picks its target; a name frozen at start-up means
+    # it picks the wrong IDE or none at all.
+    ide = make_globals()
+    watch = watcher.Watcher(ide, root)
+    watch.start()
+    ide["projects"].primary = FakeProject(r"C:\p\boiler.project")
+    watch.beat_if_due(ipc.now() + instances.HEARTBEAT_INTERVAL_S + 1.0)
+    reg = instances.read(root, watch.instance_id)
+    assert reg["project_name"] == "boiler"
+    assert reg["instance_id"] == watch.instance_id  # the directory keeps its name
+
+
+def test_the_sync_folder_is_reported(root):
+    ide = make_globals()
+    ide["projects"].primary.props["cds-sync-folder"] = r"D:\work\sync"
+    watch = watcher.Watcher(ide, root)
+    watch.start()
+    assert instances.read(root, watch.instance_id)["sync_dir"] == r"D:\work\sync"
+
+
+def test_a_relative_sync_folder_resolves_against_the_project(root):
+    ide = make_globals()
+    ide["projects"].primary.props["cds-sync-folder"] = "./export"
+    watch = watcher.Watcher(ide, root)
+    watch.start()
+    assert instances.read(root, watch.instance_id)["sync_dir"] == \
+        os.path.normpath(r"C:\p\export")
+
+
+def test_an_unset_sync_folder_reads_as_nothing(root):
+    watch = watcher.Watcher(make_globals(), root)
+    watch.start()
+    assert instances.read(root, watch.instance_id)["sync_dir"] is None
+
+
+def test_the_ide_field_names_the_product(root):
+    watch = watcher.Watcher(make_globals(), root)
+    watch.start()
+    # IronPython 2.7.7 is both Delta 1.10 and Lenze 3.24, so the version
+    # string alone cannot tell them apart.
+    assert os.path.basename(sys.executable) in \
+        instances.read(root, watch.instance_id)["ide"]
+
+
+def test_globals_without_system_are_refused_at_once(root):
+    with pytest.raises(KeyError):
+        watcher.Watcher({"projects": FakeProjects(None)}, root)
+
+
+# --- build compiled something else -----------------------------------------
+
+def test_build_says_so_when_app_was_ignored(root):
+    # Project_Build.py only offers the chooser once the project's
+    # multiple-application flag is set, and it refreshes that flag afterwards,
+    # so the first build after a second application appears ignores --app.
+    watch = watcher.Watcher(make_globals(), root)
+    watch.start()
+    watch.handlers["build"] = _fake_build("Application")
+    result = run(watch, "build", {"app": "AppB"})
+    assert result["ok"] is False and "AppB" in result["error"]
+
+
+def test_build_is_happy_when_the_named_app_comes_back(root):
+    watch = watcher.Watcher(make_globals(), root)
+    watch.start()
+    watch.handlers["build"] = _fake_build("AppB")
+    assert run(watch, "build", {"app": "AppB"})["ok"] is True
+
+
+def _fake_build(app_name):
+    """Stand in for the real script: report which application it compiled."""
+    from cds.ide import silent
+
+    def handler(cmd, started):
+        outcome = silent.Outcome(
+            [{"level": "info", "text": "%s\nErrors: 0" % app_name}], "")
+        error = outcome.error_text() or watcher._wrong_application(
+            cmd, cmd.get("args") or {}, outcome)
+        return commands.new_result(cmd, not error, started_at=started,
+                                   error=error, messages=outcome.messages)
+    return handler

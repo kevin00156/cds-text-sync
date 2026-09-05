@@ -218,3 +218,85 @@ def test_ctrl_c_while_waiting_leaves_no_command_behind(watch, monkeypatch):
     with pytest.raises(KeyboardInterrupt):
         cds_ide.main(["ping"])
     assert commands.list_command_ids(watch.root, watch.instance_id) == []
+
+
+# --- --timeout means one thing -------------------------------------------
+
+def busy_since(root, seconds_ago):
+    reg = instances.new_registration("softplc-9", 9, "ide",
+                                     r"C:\p\softplc.project")
+    instances.set_state(reg, instances.STATE_BUSY, ipc.now() - seconds_ago)
+    instances.write(root, reg)
+    return reg
+
+
+def test_timeout_stretches_how_long_a_busy_ide_counts_as_alive(root, capsys,
+                                                               monkeypatch):
+    # Raising --timeout is exactly how a caller says "I will wait for this
+    # long import". list honoured that; the target lookup ignored it and
+    # pre-filtered on the hardcoded 120 seconds instead.
+    busy_since(root, 200.0)
+    cds_ide.main(["list", "--timeout", "600"])
+    assert "softplc-9" in capsys.readouterr().out
+
+    reached = []
+
+    def fake_send(root, instance_id, *args, **kwargs):
+        reached.append(instance_id)
+        return {"ok": True, "command": "ping", "messages": []}
+
+    monkeypatch.setattr(cds_ide, "send", fake_send)
+    assert cds_ide.main(["ping", "--timeout", "600"]) == cds_ide.EXIT_OK
+    assert reached == ["softplc-9"]
+
+
+def test_the_default_timeout_still_writes_off_a_long_gone_command(root, capsys):
+    busy_since(root, 200.0)
+    assert cds_ide.main(["ping"]) == cds_ide.EXIT_TARGET
+    assert "no live IDE" in capsys.readouterr().err
+
+
+# --- the watcher went away while we waited --------------------------------
+
+def gone_after_first_wait(watch, monkeypatch):
+    """Make the watcher vanish the moment the CLI settles in to wait."""
+    def vanish(_seconds):
+        instances.delete(watch.root, watch.instance_id)
+    monkeypatch.setattr(time, "sleep", vanish)
+
+
+def test_stop_counts_a_vanished_watcher_as_success(watch, monkeypatch, capsys):
+    # stop tears down one tick after answering, so the answer can be gone by
+    # the time the CLI looks. The instance being gone IS the confirmation.
+    gone_after_first_wait(watch, monkeypatch)
+    assert cds_ide.main(["stop"]) == cds_ide.EXIT_OK
+    assert "gone" in capsys.readouterr().out
+
+
+def test_any_other_command_says_the_watcher_died(watch, monkeypatch, capsys):
+    gone_after_first_wait(watch, monkeypatch)
+    assert cds_ide.main(["export"]) == cds_ide.EXIT_FAILED
+    assert "stopped before answering export" in capsys.readouterr().err
+
+
+# --- compare's real answer is what it printed -----------------------------
+
+def test_compare_shows_the_per_object_differences(watch, monkeypatch, capsys):
+    watch.handlers["compare"] = lambda cmd, started: commands.new_result(
+        cmd, True, started_at=started,
+        messages=[{"level": "info", "text": "modified 1, only on disk 0"}],
+        stdout_tail="M  Newcomer.st  (pou)")
+    answering(watch, monkeypatch)
+    assert cds_ide.main(["compare"]) == cds_ide.EXIT_OK
+    printed = capsys.readouterr()
+    assert "M  Newcomer.st" in printed.err
+
+
+def test_a_successful_export_stays_quiet(watch, monkeypatch, capsys):
+    watch.handlers["export"] = lambda cmd, started: commands.new_result(
+        cmd, True, started_at=started,
+        messages=[{"level": "info", "text": "Export complete!"}],
+        stdout_tail="200 lines nobody asked for")
+    answering(watch, monkeypatch)
+    cds_ide.main(["export"])
+    assert "nobody asked for" not in capsys.readouterr().err

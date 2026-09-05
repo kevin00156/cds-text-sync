@@ -119,20 +119,29 @@ def delete(root, instance_id):
     shutil.rmtree(ipc.instance_dir(root, instance_id), ignore_errors=True)
 
 
-def prune_stale(root, now=None, max_age=STALE_TIMEOUT_S,
-                busy_timeout=BUSY_TIMEOUT_S):
+def prune_stale(root, now=None, max_age=STALE_TIMEOUT_S):
     """Delete registrations left behind by watchers that died.
 
-    Stale means both a heartbeat older than max_age and a negative verdict
-    from is_alive, so a watcher part way through a long command survives —
-    deleting one would pull the directory out from under a live process.
+    Only idle instances are ever pruned. A busy one is running a command and
+    cannot beat while it does; a real import on a real project takes minutes,
+    and deleting its directory pulls cmd/ and result/ out from under a live
+    process — queued commands vanish and the caller waits for an answer that
+    can no longer be written.
+
+    Tying this to the command timeout (the CLI's 120 seconds) looked like
+    protection but only covered commands shorter than that, which is not the
+    interesting case. Cleaning up after a dead watcher and deciding a command
+    has taken too long are different jobs; they do not get to share a number.
+    An instance stuck in busy is cleared by re-running Project_watch.py.
+
     Returns the instance ids that were removed.
     """
     now = ipc.now(now)
     removed = []
     for reg in read_all(root):
-        age = now - float(reg.get("heartbeat_epoch") or 0.0)
-        if age <= max_age or is_alive(reg, now, max_age, busy_timeout):
+        if reg.get("state") == STATE_BUSY:
+            continue
+        if now - float(reg.get("heartbeat_epoch") or 0.0) <= max_age:
             continue
         delete(root, reg["instance_id"])
         removed.append(reg["instance_id"])

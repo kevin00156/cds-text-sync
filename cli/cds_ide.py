@@ -98,12 +98,16 @@ def _add_target(parser):
 # Talking to a watcher
 # --------------------------------------------------------------------------
 
-def send(root, instance_id, name, args, timeout, poll=POLL_S):
-    """Queue a command and wait for its result. None means it timed out.
+GONE = "gone"  # the watcher shut down while we were waiting
 
-    A command that times out is un-queued, so it cannot fire later against an
-    IDE whose owner has walked away. If the watcher already claimed it, the
-    result it writes is swept by that watcher's next start instead.
+
+def send(root, instance_id, name, args, timeout, poll=POLL_S):
+    """Queue a command and wait for its result.
+
+    None means it timed out; GONE means the watcher went away. A command that
+    times out is un-queued, so it cannot fire later against an IDE whose owner
+    has walked away. If the watcher already claimed it, the result it writes
+    is swept by that watcher's next start instead.
     """
     cmd = commands.write_command(root, instance_id, name, args)
     deadline = time.time() + timeout
@@ -112,6 +116,11 @@ def send(root, instance_id, name, args, timeout, poll=POLL_S):
             result = commands.take_result(root, instance_id, cmd["id"])
             if result is not None:
                 return result
+            if instances.read(root, instance_id) is None:
+                # The instance directory goes with the registration, so the
+                # answer is not coming. For `stop` that IS the answer; for
+                # anything else, better to say so than to wait out the clock.
+                return GONE
             if time.time() >= deadline:
                 commands.delete_command(root, instance_id, cmd["id"])
                 return None
@@ -146,17 +155,31 @@ def run_list(root, ns):
 
 def run_on_target(root, ns):
     try:
-        reg = instances.resolve_target(live_instances(root), ns.target,
-                                       busy_timeout=ns.timeout)
+        # --timeout is how long the caller will wait, so it is also how long a
+        # busy instance still counts as alive. Both places, one meaning.
+        reg = instances.resolve_target(live_instances(root, ns.timeout),
+                                       ns.target, busy_timeout=ns.timeout)
     except instances.TargetError as exc:
         return _report_target_error(exc)
     result = send(root, reg["instance_id"], ns.command, command_args(ns),
                   ns.timeout)
+    if result is GONE:
+        return _report_gone(ns.command, reg["instance_id"])
     if result is None:
         print("timed out after %gs waiting for %s"
               % (ns.timeout, reg["instance_id"]), file=sys.stderr)
         return EXIT_TIMEOUT
     return _report(result, ns.json)
+
+
+def _report_gone(command, instance_id):
+    """The watcher vanished mid-wait: what that means depends on the ask."""
+    if command == "stop":
+        print("info: %s is gone" % instance_id)
+        return EXIT_OK
+    print("%s stopped before answering %s" % (instance_id, command),
+          file=sys.stderr)
+    return EXIT_FAILED
 
 
 def _report_target_error(exc):
@@ -186,11 +209,19 @@ def _report(result, as_json):
     # The error repeats the first bad message, or the question. Say it once.
     if result.get("error") and result["error"] not in said:
         print("error: " + result["error"], file=sys.stderr)
-    if not result.get("ok") and result.get("stdout_tail"):
-        # A failure is the one time the script's own output is worth the room.
-        print("--- last output from the IDE ---", file=sys.stderr)
+    if _wants_tail(result) and result.get("stdout_tail"):
+        print("--- output from the IDE ---", file=sys.stderr)
         print(result["stdout_tail"], file=sys.stderr)
     return EXIT_OK if result.get("ok") else EXIT_FAILED
+
+
+def _wants_tail(result):
+    """When the summary is not the whole answer, show what the script printed.
+
+    A failure always earns the room. So does compare, whose useful output is
+    the per-object list it prints — the messages only carry the counts.
+    """
+    return not result.get("ok") or result.get("command") == "compare"
 
 
 def main(argv=None):

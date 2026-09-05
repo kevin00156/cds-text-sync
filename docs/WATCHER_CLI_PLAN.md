@@ -97,6 +97,7 @@ cds/ide/watcher.py     看門人每一拍做什麼：撿命令、執行、寫結
 cds/ide/session.py     把看門人裝進一個活著的 IDE 再拆下來：掛計時器、腳本返回、
                        狀態放 sys、停止。這一半全是 .NET 與 sys 狀態，測不到。
 cds/ide/silent.py      沒有人可以按對話框時，怎麼把 Project_*.py 跑完。
+cds/ide/project.py     問這個 IDE 現在開著什麼：專案路徑、同步資料夾、產品名稱。
 Project_watch.py       薄入口，跟其他 Project_*.py 一樣出現在 Tools > Scripting > Scripts。
 cli/cds_ide.py         CPython 3 的 CLI，只依賴 cds/core 的那三支。
 tools/probe_watcher_ui.py  驗收用的啟動器，給 --runscript 跑。
@@ -107,8 +108,11 @@ tests/test_commands.py
 
 協定原本規劃成單一檔案 `cds/core/ipc.py`，寫出來 402 行，超過 PRINCIPLES §2 的硬上限。
 拆成三支不是為了壓行數：目錄與檔案讀寫、誰還活著、命令怎麼交接，本來就是三件用「和」
-才描述得完的事，PRINCIPLES §1 要求拆開。三支模組名稱都不跟標準函式庫撞名，
-因為 IronPython 2.7 在沒有 `absolute_import` 時會先在套件內找同名模組。
+才描述得完的事，PRINCIPLES §1 要求拆開。
+
+模組命名要注意 IronPython 2.7 在沒有 `absolute_import` 時會先在套件內找同名模組。
+`cds/core/commands.py` 其實跟 Python 2 的標準函式庫 `commands` 撞名（原本這裡寫「都不撞名」，那是錯的），
+但實際無害：沒有任何地方做 `import commands`，而隱式相對匯入的遮蔽只影響 `cds/core/` 套件內部。
 
 資料流：CLI 寫命令檔，看門人在下一次輪詢撿到、執行、寫結果檔並刪命令檔，CLI 讀到結果檔就刪掉它並回報。
 
@@ -155,9 +159,9 @@ instances\
 - 實作補上兩個上面 JSON 沒列的欄位：`heartbeat_epoch` 與 `busy_since_epoch`，都是 epoch 秒的數字。
   判活是拿時間相減，直接存數字就不必去解析本地時間字串，也避開日光節約時間那一小時的模糊地帶。
   原本的 `heartbeat` 與 `busy_since` 字串保留，那是給打開檔案的人看的。
-- 「清掉陳舊登記檔」的條件比原本嚴一點：心跳超過 60 秒**而且**判活函式也認為它死了才清。
-  正在跑三分鐘匯入的看門人本來就發不出心跳，只看 60 秒會把活著實例的整個目錄刪掉。
-  判活對 `busy` 狀態是看 `busy_since` 有沒有超過命令逾時，所以忙碌中的實例不會被誤刪。
+- 「清掉陳舊登記檔」的條件：**`busy` 的登記檔一律不清**，只清 `idle` 且心跳超過 60 秒的。
+  （2026-09-05 改，見第 15 節。原本的條件綁在 120 秒的命令逾時上，只保護得了跑不到兩分鐘的命令，
+  而真專案的匯入就是會超過。）卡在 `busy` 的實例用「再跑一次 `Project_watch.py`」清掉。
 - 寫檔的覆蓋動作：有 `os.replace` 就用它（CPython 3，覆蓋是原子的），沒有就退回「先刪目標再 rename」
   （IronPython 2.7 走這條）。Windows 上 `os.rename` 碰到目標已存在會直接失敗，而登記檔每 2 秒覆寫同一個檔名。
 
@@ -540,3 +544,83 @@ Delta 的點擊儀器失效的原因：桌面上開著一個「AORUS Control Cen
 `Project_watch.py`，回報 **IDE 內確實可操作**。同時從外面量到登記檔正常、`list` 看得到、`status` 往返 57 毫秒，
 證明計時器確實在 IDE 自己的訊息迴圈上 tick。這補上了 4.0.0.0 這一版原本只能靠「機制相同」推論的那一格：
 計時器設計在 ScriptEngine 4.0.0.0 與 4.2.0.0 兩個大版本上都有真人資料。
+
+---
+
+## 15. 審查後的修正與取捨（2026-09-05）
+
+獨立的 reviewer 對 `feat/ide-watcher-cli` 相對 `main` 的全部差異做了審查，結論是必修 3 條、建議 11 條、
+不改 8 條。**必修與建議全部採納並修掉了**，理由是建議裡有好幾條正好卡在第二階段要做的事情上：
+AI 工作迴圈要靠 `status` 問同步資料夾在哪、要靠 `list` 挑目標、要靠 `build --app` 編對的 application，
+這三件事在修之前都不成立。
+
+### 必修
+
+**腳本放棄卻沒開對話框時，命令會回報成功。** `Project_import.py` 有兩條放棄路徑只 `print()` 就返回，
+不經過 `system.ui`。判斷成敗的規則是「代理 UI 有沒有收到 warning 或 error」，於是找不到失敗訊號，
+`ok` 是 true、exit code 0。對 agent 來說這是最壞的一種錯：它會以為匯入成功、接著去編譯，
+編的是沒被更新過的舊程式碼。兩層都補了：`Outcome.error_text()` 多一條規則，整輪跑完連一則 `info`
+都沒有就算失敗（四支腳本成功時一定會呼叫一次 `system.ui.info`，所以不會誤判）；
+`Project_import.py` 那兩行 `print` 改成 `system.ui.warning`，讓訊息本身帶出原因。
+
+**`run_one` 有三行在 `try` 外面，出事就把實例永久卡在 `busy`。** 寫結果、清結果目錄、寫回 idle
+三個動作都在保護範圍外，任何一個丟例外，登記檔就停在 `busy`。之後 120 秒一到 CLI 判它死了、
+`list` 看不到它，而 `prune_stale` 又因為心跳是新的而不清它——沒有任何一方會自己修好。
+現在全部搬進 `try`，「寫回 idle」放在 `finally`，`prune_results` 也容忍檔案在列出後才被刪掉
+（CLI 讀到結果就立刻刪，那個窗口是真的）。
+
+**`prune_stale` 會刪掉正在執行長命令的實例。** 原本的保護是「心跳過期**而且** `is_alive` 也說它死了」，
+而 `is_alive` 對 `busy` 看的是 120 秒的命令逾時。所以保護只在命令跑不到兩分鐘時成立，
+而第三階段要跑的正是真專案的匯入。改成 **`busy` 的登記檔一律不清**，只清 idle 且心跳過期的。
+把「清死人留下的檔案」跟「判斷命令跑太久」綁在同一個數字上本來就是錯的，那是兩件事。
+卡在 `busy` 的實例改用「再跑一次 `Project_watch.py`」清掉。
+
+### 建議
+
+全部照做，其中幾條值得記下為什麼：
+
+- **`--timeout` 在同一支 CLI 裡有兩種意思。** `list` 拿它當忙碌容忍度，`run_on_target` 卻先用寫死的
+  120 秒過濾一次。使用者調高 `--timeout` 的目的正是要等長命令，結果 `list` 看得到、`ping` 說找不到。
+- **登記檔的專案欄位永遠停在啟動那一刻。** 關掉專案再開另一個不必重啟看門人，但 `list` 顯示的還是舊名字。
+  現在每次心跳順手重讀 `projects.primary`，`instance_id` 保留出生時的名字（它是目錄名）。
+- **`sync_dir` 從頭到尾是 null。** 新增 `cds/ide/project.py`，直接讀 `cds-sync-folder` 專案屬性，
+  相對路徑照 `load_base_dir` 的規則對專案檔解析。不透過 `load_base_dir()` 本身，因為它會停下來問
+  電腦名稱不符——那不是計時器 tick 該做的事。`ide` 欄位也改成以執行檔名開頭，
+  因為 Delta 1.10 與 Lenze 3.24 的 `sys.version` 都是 IronPython 2.7.7，分不出來。
+- **`compare` 的逐物件差異在人類可讀輸出裡被丟掉。** CLI 原本只在失敗時印 `stdout_tail`，
+  而 compare 找到差異時是成功。現在 compare 一律印，readMe 的說法才站得住。
+- **對話框標題沒有測試綁住。** 新增一個測試去掃四支腳本與共用 `.pyw` 裡所有 `ask_yes_no(` 的字面標題，
+  斷言它們跟 `silent.YES_NO` 兩邊完全一致。誰改了標題，測試會紅，而不是等到 export 開始每次都失敗。
+- **第一次 `build --app` 可能被無聲忽略。** `Project_Build.py` 只在專案屬性
+  `cds-text-sync-multipleApps` 為真時才顯示選擇器，而它是在選完之後才更新那個旗標。
+  新增第二個 application 之後的第一次 build 會直接編 active application 並回報成功。
+  不動那支舊腳本，改成在看門人這端核對結果訊息裡有沒有出現 `--app` 指定的名字，沒有就判失敗並說明原因。
+- **`stop` 的結果只活 250 毫秒。** CLI 現在在等待時順手看登記檔還在不在；不在就代表看門人走了。
+  對 `stop` 而言那就是成功，對其他命令而言是「看門人在回答前就停了」的失敗，
+  兩種都比枯等 120 秒後印「逾時」好。
+
+### 一條做了但要講清楚界線的
+
+reviewer 提到「`self.busy` 擋不住使用者手動跑腳本」：使用者從 Tools 選單跑 `Project_export.py` 的時候，
+如果 IDE 抽送到計時器訊息，tick 就會在旁邊開始跑另一支腳本，兩邊搶 `sys.modules`、`__main__.system`
+與 `sys.stdout`。reviewer 自己註明沒有驗證這會不會真的發生。
+
+`cds/ide/silent.py` 加了一個模組層級的旗標 `silent.running()`，`tick()` 看到就直接返回。
+**但它擋不住 reviewer 描述的那個情境**，因為使用者手動跑的腳本走的是 IDE 自己的執行器，
+根本不經過 `silent.run`，這個模組看不到它。目前沒有已知的辦法從計時器裡偵測到那種腳本。
+這個旗標實際擋住的是「另一個呼叫端」——例如第四段要包的 MCP，或別處建出來的第二個 `Watcher`。
+程式碼裡的 docstring 已經照這個界線寫，沒有誇大。
+
+### 沒改的
+
+reviewer 的「不改」八條照收。另外更正第 4 節的一句話：那裡寫「三支模組名稱都不跟標準函式庫撞名」，
+對 `cds/core/commands.py` 而言是錯的（Python 2 有 `commands` 模組）。實際無害，因為沒有任何地方做
+`import commands`，而隱式相對匯入的遮蔽只影響 `cds/core/` 套件內部。
+
+### 檔案大小
+
+`cds/ide/watcher.py` 修完一度到 339 行，把「問這個 IDE 現在開著什麼」抽成 `cds/ide/project.py`
+之後回到 292 行，抽出來的那支也因此可以獨立測。`cds/ide/silent.py` 是 319 行，
+超過 PRINCIPLES §2 的 300 行軟目標、在 400 行硬上限內，這裡選擇不拆：
+剩下的候選接縫（stdout 攔截、對話框作答表）拆出來都只有四五十行，
+分開之後兩邊都還是得一起讀才看得懂那件事，不划算。

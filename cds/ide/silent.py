@@ -82,6 +82,14 @@ class Outcome(object):
         for message in self.messages:
             if message["level"] in BAD_LEVELS:
                 return message["text"]
+        if not self.messages:
+            # Every one of the four scripts calls system.ui.info when it
+            # finishes (Project_export 383, Project_import 143,
+            # Project_compare 149, Project_Build 393), so silence means it
+            # gave up on a path that only print()s — and a caller told "ok"
+            # would go on to build code that was never imported.
+            return ("the script returned without reporting anything; see "
+                    "stdout_tail for what it printed")
         return None
 
 
@@ -134,6 +142,25 @@ class SilentSystem(object):
         return getattr(self._real, name)
 
 
+def running():
+    """Is this module driving a script right now?
+
+    Two overlapping runs would fight over sys.modules["codesys_ui"],
+    __main__.system and sys.stdout, and one command's arguments would end up
+    answering the other's dialogs. The flag is module-level rather than per
+    watcher so a second caller — a Watcher built elsewhere, the MCP wrapper —
+    is caught too, not just a re-entrant tick.
+
+    It does NOT see a script the user started from the Tools menu: that goes
+    through the IDE's own executor and never reaches this module. There is no
+    known way to detect one from here (WATCHER_CLI_PLAN.md 15).
+    """
+    return _RUNNING["depth"] > 0
+
+
+_RUNNING = {"depth": 0}
+
+
 def run(ide_globals, script_path, entry, args):
     """Exec script_path, call its entry function, hand back an Outcome.
 
@@ -146,8 +173,16 @@ def run(ide_globals, script_path, entry, args):
     namespace["__name__"] = "cds_watcher_script"
     namespace["__file__"] = script_path
     namespace["system"] = silent
-    _exec_file(script_path, namespace)  # this reloads the codesys_* modules
+    _RUNNING["depth"] += 1
+    try:
+        _exec_file(script_path, namespace)  # reloads the codesys_* modules
+        return _call(namespace, entry, silent, ui, args)
+    finally:
+        _RUNNING["depth"] -= 1
 
+
+def _call(namespace, entry, silent, ui, args):
+    """Run the entry function with the stand-ins installed, then take them out."""
     tee = _Tee(sys.stdout)
     undo = _install(silent, ui, args)
     sys.stdout = tee

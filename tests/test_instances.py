@@ -168,3 +168,22 @@ def test_a_dead_instance_is_not_a_target_even_by_exact_id():
     with pytest.raises(instances.TargetError):
         instances.resolve_target([make_reg("p-1", "p", now=T0 - 300.0)],
                                  "p-1", now=T0)
+
+
+def test_prune_stale_never_touches_a_busy_instance(tmp_path):
+    # A real import on a real project takes minutes. Tying this to the
+    # command timeout only protected commands shorter than that, which is not
+    # the interesting case: deleting the directory takes cmd/ and result/ away
+    # from a live process.
+    root = str(tmp_path)
+    ipc.ensure_dirs(root, "p-1")
+    instances.write(root, make_reg("p-1", "p", state=instances.STATE_BUSY))
+    for elapsed in (150.0, 600.0, 86400.0):
+        assert instances.prune_stale(root, now=T0 + elapsed) == []
+    assert os.path.exists(ipc.instance_dir(root, "p-1"))
+
+
+def test_prune_stale_still_clears_an_idle_corpse(tmp_path):
+    root = str(tmp_path)
+    instances.write(root, make_reg("p-1", "p"))
+    assert instances.prune_stale(root, now=T0 + 150.0) == ["p-1"]

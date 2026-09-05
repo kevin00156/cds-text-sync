@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 ---
 
+### Unreleased
+
+**Drive a running IDE from a terminal.** `Project_watch.py` (Tools > Scripting) arms a timer and returns immediately, leaving a listener in the IDE; `cli/cds_ide.py` then runs export, import, compare and build in it from any shell, without the project being closed. Run `Project_watch.py` a second time, or `cds_ide.py stop`, to shut the listener down.
+
+- **The script must end, or the IDE is unusable.** `system.delay()` pumps repaints and posted messages but not mouse and keyboard, so a script that loops leaves the window looking alive and refusing every click — measured with real clicks on CODESYS 3.5.21.40 and confirmed by hand on DIADesigner-AX 1.10. The listener therefore lives on a WinForms timer hung on the IDE's own message loop, which still ticks on the UI thread, so nothing about the object-model calls changes. Between commands the IDE is genuinely free; while a command runs it is busy, as it is when you run the script from the menu yourself.
+- **The dialogs are answered by flags, never guessed.** `--yes` confirms an import, `--force` overrides a version or computer mismatch, `--delete-orphans` answers the orphan prompt, `--app` picks the application to build. A question with no flag behind it comes back as `needs_input` with the flag named, exit code 1, and nothing changed in the IDE. `compare` reports counts and the per-object differences instead of opening its picker.
+- **One directory per IDE** under `%LOCALAPPDATA%\cds-text-sync\instances`, so several IDEs can be driven at once; `list` shows them and `--target` picks one by instance id or project name. Exit codes: 0 done, 1 failed or needs a flag, 2 no single live IDE matched, 3 timed out.
+- New: `cds/core/{ipc,instances,commands}.py` (the file protocol, pure Python, unit-tested), `cds/ide/{watcher,session,silent,project}.py` (the IDE half), `cli/cds_ide.py`, `docs/WATCHER_CLI_PLAN.md`, `docs/RESEARCH_HTTP_IDE_CONTROL.md`. `Project_import.py` now reports its two give-up paths through `system.ui` instead of `print`, so a cancelled import cannot look like a successful one. Tests: 301.
+
+---
+
 ### Version k1.1.0 (2026-07-15)
 
 **Four upstream features ported as concepts onto the fork's text-first engine** (upstream's 2.x implementations are built on the external-engine/CLI architecture this fork rejected, so these are re-implementations, not merges):

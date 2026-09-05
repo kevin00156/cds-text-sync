@@ -124,7 +124,13 @@ def prune_results(root, instance_id, now=None, max_age=RESULT_TTL_S):
     removed = []
     for name in ipc.json_names(directory):
         path = os.path.join(directory, name)
-        if now - os.path.getmtime(path) <= max_age:
+        try:
+            age = now - os.path.getmtime(path)
+        except (IOError, OSError):
+            # The CLI deletes a result the moment it reads one, so a name
+            # listed a microsecond ago can already be gone. Not our business.
+            continue
+        if age <= max_age:
             continue
         ipc.remove_file(path)
         removed.append(name[:-len(".json")])
