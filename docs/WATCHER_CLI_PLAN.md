@@ -343,7 +343,7 @@ python cli/cds_ide.py stop    [--target X]
   - [x] `tests/test_watcher.py` 改成驅動 tick，涵蓋：重入時第二個 tick 直接返回、tick 內例外不會外洩、
         `main()` 掛計時器後返回、再跑一次等於 stop、`stop` 命令的答案在下一拍才拆台（讓呼叫端有一整拍可以收）。
   - [x] `tools/probe_watcher_ui.py`：給 `--runscript` 用的驗收啟動器。
-  - [x] 驗收（監督者自動跑，2026-09-05）：CODESYS 3.5.21.40 上看門人上線後，兩個命令之間每次真實點擊 File 選單都開出下拉；`ping`、80 個 POU 的 `export`（7.5 秒）、`stop` 全部成功；stop 後 `list` 為空、選單仍可點。Delta 1.10 上 `ping`、`export`、`stop` 同樣全過，但真實點擊的儀器被桌面上一個無關的最上層視窗擋住，留給使用者 30 秒手動確認。細節見 14.7 節。
+  - [x] 驗收（監督者自動跑，2026-09-05）：CODESYS 3.5.21.40 上看門人上線後，兩個命令之間每次真實點擊 File 選單都開出下拉；`ping`、80 個 POU 的 `export`（7.5 秒）、`stop` 全部成功；stop 後 `list` 為空、選單仍可點。Delta 1.10 上 `ping`、`export`、`stop` 同樣全過，真實點擊的儀器被桌面上一個無關的最上層視窗擋住，改由使用者當天稍後在真實專案上手動確認**可操作**。細節見 14.7 節。
   - [x] 驗收（無頭，2026-09-05 跑完）：先確認 `--noUI` 底下 WinForms 計時器真的會 tick
         （探針用 `CDS_PROBE_KEEPALIVE=1` 停在 `system.delay()` 裡，`ping` 回得來就證明計時器有跑）。
         然後階段 1 到 3 全部重跑：`list`、`ping --target`、`status`、不給 target 時 exit code 2、`stop` 後程序自己退出且不留殘檔；
@@ -535,3 +535,8 @@ IronPython 那邊可以透過 .NET 的 `FileShare.Delete`，但 CLI 是 CPython�
 Delta 的點擊儀器失效的原因：桌面上開著一個「AORUS Control Center」視窗（使用者自己的程式，約 00:47 出現在最上層），`SetForegroundWindow` 對 Delta 視窗一直回 False，WinForms 的 MenuStrip 在視窗不是作用中時會吞掉點擊，改成投遞 Alt+F 訊息也只會把 File 反白、不開下拉。這跟看門人無關：連 `stop` 之後、沒有任何腳本在跑的時候也點不開。監督者沒有動那個視窗。
 
 還需要人的兩件事：在 Delta 1.10 上從 Tools 選單啟動 `Project_watch.py`，點個 30 秒選單確認可操作；在有 application 的真專案上跑一次 `build` 看錯誤數。
+
+**第一件當天稍後由使用者做完了。** 他在自己的真實專案 `Shm_2026.07.29` 上，從 Delta 1.10 的 Tools 選單啟動
+`Project_watch.py`，回報 **IDE 內確實可操作**。同時從外面量到登記檔正常、`list` 看得到、`status` 往返 57 毫秒，
+證明計時器確實在 IDE 自己的訊息迴圈上 tick。這補上了 4.0.0.0 這一版原本只能靠「機制相同」推論的那一格：
+計時器設計在 ScriptEngine 4.0.0.0 與 4.2.0.0 兩個大版本上都有真人資料。
