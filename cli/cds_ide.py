@@ -100,6 +100,12 @@ def _add_target(parser):
 
 GONE = "gone"  # the watcher shut down while we were waiting
 
+# How long the registration has to stay missing before we believe it. Under
+# IronPython the watcher has no os.replace, so its every-two-second rewrite
+# deletes the file and renames the new one into place — for a moment there is
+# no registration, and a single missed read would call a healthy IDE dead.
+GONE_AFTER_S = 1.0
+
 
 def send(root, instance_id, name, args, timeout, poll=POLL_S):
     """Queue a command and wait for its result.
@@ -111,16 +117,22 @@ def send(root, instance_id, name, args, timeout, poll=POLL_S):
     """
     cmd = commands.write_command(root, instance_id, name, args)
     deadline = time.time() + timeout
+    missing_since = None
     try:
         while True:
             result = commands.take_result(root, instance_id, cmd["id"])
             if result is not None:
                 return result
-            if instances.read(root, instance_id) is None:
-                # The instance directory goes with the registration, so the
-                # answer is not coming. For `stop` that IS the answer; for
-                # anything else, better to say so than to wait out the clock.
-                return GONE
+            if instances.read(root, instance_id) is not None:
+                missing_since = None
+            else:
+                missing_since = missing_since or time.time()
+                if time.time() - missing_since >= GONE_AFTER_S:
+                    # The instance directory goes with the registration, so
+                    # the answer is not coming. For `stop` that IS the answer;
+                    # for anything else, better to say so than wait out the
+                    # clock.
+                    return GONE
             if time.time() >= deadline:
                 commands.delete_command(root, instance_id, cmd["id"])
                 return None

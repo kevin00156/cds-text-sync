@@ -333,6 +333,10 @@ Each IDE running the watcher gets its own directory under `%LOCALAPPDATA%\cds-te
 | 2 | no single listening IDE matched — none found, or several |
 | 3 | timed out waiting for the answer (`--timeout`, 120 seconds by default) |
 
+### Letting an AI agent do this
+
+[`docs/AI_WORKFLOW.md`](docs/AI_WORKFLOW.md) is the same thing written for an agent that has a shell but cannot see the IDE: the edit → compare → import → build → read-the-errors loop, how to read every field of `--json`, which flag answers which `needs_input`, and what it must not touch. `skills/cds-ide/SKILL.md` is the condensed version — copy that folder into `%USERPROFILE%\.claude\skills\` and Claude Code will pick it up in any project.
+
 ---
 
 ## 🤝 Team Collaboration

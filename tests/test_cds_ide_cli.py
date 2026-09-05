@@ -263,6 +263,30 @@ def gone_after_first_wait(watch, monkeypatch):
     def vanish(_seconds):
         instances.delete(watch.root, watch.instance_id)
     monkeypatch.setattr(time, "sleep", vanish)
+    monkeypatch.setattr(cds_ide, "GONE_AFTER_S", 0.0)
+
+
+def test_a_registration_blinking_out_mid_rewrite_is_not_death(watch,
+                                                              monkeypatch):
+    # IronPython has no os.replace, so the watcher's rewrite deletes the file
+    # and renames the new one in. Calling a healthy IDE dead on one missed
+    # read made every other status come back "stopped before answering".
+    path = ipc.registration_path(watch.root, watch.instance_id)
+    saved = ipc.read_json(path)
+    turns = []
+
+    def blink(_seconds):
+        turns.append(len(turns))
+        if len(turns) == 1:
+            ipc.remove_file(path)          # mid-rewrite: no file right now
+            return
+        ipc.write_json(path, saved)        # ...and it is back
+        cmd = commands.next_command(watch.root, watch.instance_id)
+        if cmd is not None:
+            watch.run_one(cmd)
+
+    monkeypatch.setattr(time, "sleep", blink)
+    assert cds_ide.main(["ping"]) == cds_ide.EXIT_OK
 
 
 def test_stop_counts_a_vanished_watcher_as_success(watch, monkeypatch, capsys):
